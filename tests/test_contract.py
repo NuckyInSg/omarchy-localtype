@@ -23,7 +23,7 @@ class PluginContractTests(unittest.TestCase):
         self.assertEqual(manifest["schemaVersion"], 1)
         self.assertEqual(manifest["id"], "app.localtype.voice-input")
         self.assertEqual(manifest["kinds"], ["service", "bar-widget"])
-        self.assertEqual(manifest["entryPoints"]["service"], "Bootstrap.qml")
+        self.assertEqual(manifest["entryPoints"]["service"], "Service.qml")
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Panel.qml")
 
     def test_status_fixture_round_trips_as_json(self) -> None:
@@ -147,14 +147,14 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn('o.bind("SHIFT + F9"', controller)
 
     def test_bootstrap_runs_non_blocking_runtime_setup(self) -> None:
-        bootstrap = (PLUGIN / "Bootstrap.qml").read_text(encoding="utf-8")
+        bootstrap = (PLUGIN / "Service.qml").read_text(encoding="utf-8")
         self.assertIn('[root.ctlPath, "ensure-runtime"]', bootstrap)
         self.assertIn("Process", bootstrap)
         self.assertNotIn("sudo", bootstrap)
 
     def test_repo_contains_no_user_specific_absolute_path(self) -> None:
         checked = [
-            PLUGIN / "Bootstrap.qml",
+            PLUGIN / "Service.qml",
             PLUGIN / "Panel.qml",
             PLUGIN / "LocalTypeState.qml",
             PLUGIN / "bin/localtypectl",
