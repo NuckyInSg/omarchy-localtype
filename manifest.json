@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "app.localtype.voice-input",
+  "name": "LocalType",
+  "version": "0.1.0",
+  "author": "NuckyInSg",
+  "license": "MIT",
+  "description": "Local-first Chinese smart dictation powered by Qwen3-ASR.",
+  "keepLoaded": true,
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "service": "Bootstrap.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "LocalType",
+    "description": "Record, transcribe, and safely polish Chinese dictation with local Qwen models.",
+    "category": "AI",
+    "aliases": [
+      "voice",
+      "dictation",
+      "qwen-asr"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "defaultMode": "Smart",
+      "showRecentText": true,
+      "refreshIntervalMs": 3000
+    },
+    "schema": [
+      {
+        "key": "defaultMode",
+        "type": "enum",
+        "label": "Default dictation mode",
+        "options": [
+          "Smart",
+          "Verbatim"
+        ],
+        "defaultValue": "Smart"
+      },
+      {
+        "key": "showRecentText",
+        "type": "boolean",
+        "label": "Show the latest transcript in the panel",
+        "defaultValue": true
+      },
+      {
+        "key": "refreshIntervalMs",
+        "type": "integer",
+        "label": "Status refresh interval (milliseconds)",
+        "min": 1000,
+        "max": 15000,
+        "step": 500,
+        "defaultValue": 3000
+      }
+    ]
+  }
+}

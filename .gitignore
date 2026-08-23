@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.wav
+.venv/
+.pytest_cache/
+.idea/
+.vscode/

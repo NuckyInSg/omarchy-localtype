@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+PLUGIN = Path(__file__).resolve().parents[1]
+RUNTIME = PLUGIN / "runtime"
+
+
+class PluginContractTests(unittest.TestCase):
+    @staticmethod
+    def write_executable(path: Path, body: str) -> None:
+        path.write_text("#!/usr/bin/env bash\nset -e\n" + body, encoding="utf-8")
+        path.chmod(0o755)
+
+    def test_manifest_exposes_bootstrap_service_and_bar_widget(self) -> None:
+        manifest = json.loads((PLUGIN / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schemaVersion"], 1)
+        self.assertEqual(manifest["id"], "app.localtype.voice-input")
+        self.assertEqual(manifest["kinds"], ["service", "bar-widget"])
+        self.assertEqual(manifest["entryPoints"]["service"], "Bootstrap.qml")
+        self.assertEqual(manifest["entryPoints"]["barWidget"], "Panel.qml")
+
+    def test_status_fixture_round_trips_as_json(self) -> None:
+        fixture = {
+            "phase": "idle",
+            "service_active": True,
+            "backend_ready": True,
+            "recording": False,
+            "gpu": {"available": True, "name": "Test GPU"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "status.json"
+            path.write_text(json.dumps(fixture), encoding="utf-8")
+            environment = os.environ.copy()
+            environment["LOCALTYPE_STATUS_FIXTURE"] = str(path)
+            output = subprocess.check_output(
+                [str(PLUGIN / "bin/localtypectl"), "status"],
+                text=True,
+                env=environment,
+            )
+        self.assertEqual(json.loads(output), fixture)
+
+    def test_state_store_is_atomic_and_preserves_recent_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = os.environ.copy()
+            environment["XDG_STATE_HOME"] = directory
+            subprocess.run(
+                [
+                    str(RUNTIME / "state.py"),
+                    "set",
+                    "idle",
+                    "--mode",
+                    "smart",
+                    "--text",
+                    "本地听写测试",
+                    "--raw-text",
+                    "本地听写测试",
+                ],
+                check=True,
+                env=environment,
+            )
+            output = subprocess.check_output(
+                [str(RUNTIME / "state.py"), "show"],
+                text=True,
+                env=environment,
+            )
+        state = json.loads(output)
+        self.assertEqual(state["status"], "idle")
+        self.assertEqual(state["mode"], "smart")
+        self.assertEqual(state["last_text"], "本地听写测试")
+        self.assertIn("updated_at", state)
+
+    def test_terminal_input_never_presses_enter(self) -> None:
+        toggle = (RUNTIME / "toggle.sh").read_text(encoding="utf-8")
+        normalized = toggle.lower()
+        self.assertNotIn("-k enter", normalized)
+        self.assertNotIn("-k return", normalized)
+        self.assertIn("wl-copy", toggle)
+        self.assertIn("-k v", toggle)
+
+    def test_toggle_script_record_and_terminal_paste_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            runtime = root / "runtime"
+            state_home = root / "state"
+            log = root / "calls.log"
+
+            self.write_executable(
+                fake_bin / "systemctl",
+                'if [[ "$*" == *"is-active"* ]]; then [[ "${FAKE_RECORDING:-0}" == 1 ]]; fi\n',
+            )
+            self.write_executable(fake_bin / "systemd-run", f'printf "systemd-run\\n" >>"{log}"\n')
+            self.write_executable(fake_bin / "notify-send", ":\n")
+            self.write_executable(
+                fake_bin / "curl",
+                'if [[ "$*" == *"/transcribe"* ]]; then '
+                'printf \'{"raw_text":"测试原文","text":"测试结果"}\'; '
+                'else printf \'{"status":"ready"}\'; fi\n',
+            )
+            self.write_executable(fake_bin / "hyprctl", 'printf \'{"class":"foot"}\'\n')
+            self.write_executable(fake_bin / "wl-copy", f'cat >"{root / "clipboard.txt"}"\n')
+            self.write_executable(fake_bin / "wtype", f'printf "%s\\n" "$*" >>"{log}"\n')
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            environment["XDG_RUNTIME_DIR"] = str(runtime)
+            environment["XDG_STATE_HOME"] = str(state_home)
+            environment["FAKE_RECORDING"] = "0"
+
+            subprocess.run([str(RUNTIME / "toggle.sh"), "smart"], check=True, env=environment)
+            started = json.loads((state_home / "localtype/status.json").read_text(encoding="utf-8"))
+            self.assertEqual(started["status"], "recording")
+            self.assertEqual(started["mode"], "smart")
+
+            audio = runtime / "localtype/recording.wav"
+            audio.write_bytes(b"RIFF-test")
+            environment["FAKE_RECORDING"] = "1"
+            subprocess.run([str(RUNTIME / "toggle.sh"), "smart"], check=True, env=environment)
+
+            finished = json.loads((state_home / "localtype/status.json").read_text(encoding="utf-8"))
+            self.assertEqual(finished["status"], "idle")
+            self.assertEqual(finished["last_text"], "测试结果")
+            self.assertEqual((root / "clipboard.txt").read_text(encoding="utf-8"), "测试结果")
+            calls = log.read_text(encoding="utf-8")
+            self.assertIn("-M ctrl -M shift -k v -m shift -m ctrl", calls)
+            self.assertNotIn("enter", calls.lower())
+
+    def test_dictionary_is_valid_string_mapping(self) -> None:
+        dictionary = json.loads((PLUGIN / "config/dictionary.json").read_text(encoding="utf-8"))
+        self.assertTrue(dictionary)
+        self.assertTrue(all(isinstance(key, str) and isinstance(value, str) for key, value in dictionary.items()))
+
+    def test_installer_has_idempotent_managed_integration(self) -> None:
+        controller = (PLUGIN / "bin/localtypectl").read_text(encoding="utf-8")
+        self.assertIn("LocalType (managed; edit through the plugin)", controller)
+        self.assertIn(".requirements.sha256", controller)
+        self.assertIn(".bak.localtype-", controller)
+        self.assertIn('o.bind("F9"', controller)
+        self.assertIn('o.bind("SHIFT + F9"', controller)
+
+    def test_bootstrap_runs_non_blocking_runtime_setup(self) -> None:
+        bootstrap = (PLUGIN / "Bootstrap.qml").read_text(encoding="utf-8")
+        self.assertIn('[root.ctlPath, "ensure-runtime"]', bootstrap)
+        self.assertIn("Process", bootstrap)
+        self.assertNotIn("sudo", bootstrap)
+
+    def test_repo_contains_no_user_specific_absolute_path(self) -> None:
+        checked = [
+            PLUGIN / "Bootstrap.qml",
+            PLUGIN / "Panel.qml",
+            PLUGIN / "LocalTypeState.qml",
+            PLUGIN / "bin/localtypectl",
+            PLUGIN / "runtime/server.py",
+            PLUGIN / "runtime/state.py",
+            PLUGIN / "runtime/toggle.sh",
+        ]
+        for path in checked:
+            self.assertNotIn("/home/xinzhang", path.read_text(encoding="utf-8"), path.name)
+
+
+if __name__ == "__main__":
+    unittest.main()
