@@ -24,3 +24,6 @@ LocalType 的定位是“面向中文和中英文混合用户的本地智能语�
 - **1.0 桌面产品**：macOS、Windows 正式支持，Linux Beta，可选同步与云推理。
 
 跨平台版本应把录音、全局快捷键、当前应用识别、文字注入、权限和推理解耦为稳定接口；Omarchy 版本继续作为 Linux 产品验证和模型效果实验场。
+
+桌面主界面的竞品差距、信息架构、数据契约和分期范围见
+[LocalType × OpenTypeless：桌面产品差距与实施范围](OPENTYPELESS_GAP_ANALYSIS.md)。
