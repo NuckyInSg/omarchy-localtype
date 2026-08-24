@@ -682,7 +682,7 @@ Item {
               anchors.margins: 18
               spacing: 14
               BodyText {
-                width: parent.width
+                width: historyView.availableWidth
                 text: String(runtimeState.record.last_text || "完成一次听写后，整理结果会显示在这里。")
                 font.pixelSize: Style.font.subtitle
                 wrapMode: Text.Wrap
@@ -767,7 +767,7 @@ Item {
               delegate: Surface {
                 required property var modelData
                 required property int index
-                width: parent.width
+                width: historyView.availableWidth
                 height: Math.max(138, historyText.implicitHeight + 94)
                 borderSpec: Border.flat(index === 0 ? root.accent : root.alpha(root.foreground, 0.18), 1)
 
