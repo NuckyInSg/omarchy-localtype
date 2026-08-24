@@ -1230,10 +1230,10 @@ Item {
               anchors.margins: 18
               spacing: 13
               SectionLabel { text: root.l("LOCAL DATA", "本地数据") }
-              Row { width: parent.width; MutedText { text: root.l("Personal dictionary", "个人词典") } Item { width: parent.width - 410; height: 1 } BodyText { text: "~/.config/localtype/dictionary.json" } }
-              Row { width: parent.width; MutedText { text: root.l("Dictation history", "听写历史") } Item { width: parent.width - 410; height: 1 } BodyText { text: "~/.local/state/localtype/history.json" } }
-              Row { width: parent.width; MutedText { text: root.l("Models and runtime", "模型与环境") } Item { width: parent.width - 410; height: 1 } BodyText { text: "~/.local/share/localtype/" } }
-              Row { width: parent.width; MutedText { text: root.l("Version", "版本") } Item { width: parent.width - 210; height: 1 } BodyText { text: "LocalType 0.3.0" } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Personal dictionary", "个人词典") } BodyText { width: parent.width - 220; text: "~/.config/localtype/dictionary.json"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Dictation history", "听写历史") } BodyText { width: parent.width - 220; text: "~/.local/state/localtype/history.json"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Models and runtime", "模型与环境") } BodyText { width: parent.width - 220; text: "~/.local/share/localtype/"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Version", "版本") } BodyText { width: parent.width - 220; text: "LocalType 0.3.0"; horizontalAlignment: Text.AlignRight } }
             }
           }
         }
