@@ -42,6 +42,7 @@ REQUIREMENTS = PLUGIN_ROOT / "requirements.txt"
 DICTIONARY_DEFAULT = PLUGIN_ROOT / "config/dictionary.json"
 DICTIONARY = CONFIG_HOME / "dictionary.json"
 STATE_FILE = STATE_HOME / "status.json"
+HISTORY_FILE = STATE_HOME / "history.json"
 SERVICE_FILE = SYSTEMD_HOME / "localtype.service"
 RECORDING = RUNTIME_HOME / "recording.wav"
 LOCK_FILE = RUNTIME_HOME / "install.lock"
@@ -375,6 +376,41 @@ def ensure_default_config() -> None:
         write_if_changed(DICTIONARY, DICTIONARY_DEFAULT.read_text(encoding="utf-8"))
 
 
+def migrate_recent_history() -> None:
+    if HISTORY_FILE.exists():
+        return
+    state = saved_state()
+    final_text = str(state.get("last_text", "")).strip()
+    if not final_text:
+        return
+    raw_text = str(state.get("last_raw_text", final_text)).strip() or final_text
+    command = [
+        str(STORE_HELPER),
+        "history-add",
+        "--mode",
+        str(state.get("mode", "smart")),
+        "--application-class",
+        str(state.get("application_class", "")),
+        "--application-title",
+        str(state.get("application_title", "已迁移记录")),
+        "--scene",
+        "general",
+        "--raw-text",
+        raw_text,
+        "--final-text",
+        final_text,
+        "--duration-ms",
+        str(state.get("duration_ms", 0)),
+        "--processing-ms",
+        str(state.get("processing_ms", 0)),
+        "--created-at",
+        str(state.get("updated_at", "")),
+    ]
+    if raw_text != final_text:
+        command.append("--polished")
+    run(command)
+
+
 def wait_until_ready(timeout_seconds: int = 900) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -409,6 +445,7 @@ def ensure_runtime() -> int:
         try:
             set_state("installing", detail="Preparing LocalType")
             ensure_default_config()
+            migrate_recent_history()
             install_launcher()
             install_desktop_entry()
             install_bindings()

@@ -157,7 +157,10 @@ def add_history(args: argparse.Namespace) -> None:
     if not settings.get("keep_history", True):
         return
     entries = read_json(HISTORY_PATH, [])
-    now = datetime.now(timezone.utc)
+    try:
+        now = datetime.fromisoformat(args.created_at) if args.created_at else datetime.now(timezone.utc)
+    except ValueError:
+        now = datetime.now(timezone.utc)
     entries.insert(
         0,
         {
@@ -199,6 +202,7 @@ def main() -> None:
     history_add.add_argument("--polished", action="store_true")
     history_add.add_argument("--duration-ms", type=int, default=0)
     history_add.add_argument("--processing-ms", type=int, default=0)
+    history_add.add_argument("--created-at", default="")
     history_delete = subparsers.add_parser("history-delete")
     history_delete.add_argument("id")
     subparsers.add_parser("history-clear")

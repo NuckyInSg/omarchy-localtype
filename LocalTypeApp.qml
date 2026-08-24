@@ -339,7 +339,7 @@ Item {
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       checked: parent.checked
-      foreground: root.foreground
+      foreground: parent.checked ? root.accent : root.foreground
       accent: root.accent
       onToggled: parent.toggled(!parent.checked)
     }
@@ -751,12 +751,13 @@ Item {
         }
 
         ScrollView {
+          id: historyView
           width: parent.width
           height: parent.height - 64
           clip: true
           ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
           Column {
-            width: parent.width
+            width: historyView.availableWidth
             spacing: 12
 
             SectionLabel { text: "本地记录 · " + root.historyEntries.length + " 条" }
@@ -765,6 +766,7 @@ Item {
               model: root.historyEntries
               delegate: Surface {
                 required property var modelData
+                required property int index
                 width: parent.width
                 height: Math.max(138, historyText.implicitHeight + 94)
                 borderSpec: Border.flat(index === 0 ? root.accent : root.alpha(root.foreground, 0.18), 1)
@@ -940,6 +942,7 @@ Item {
             model: root.scenes
             delegate: Surface {
               required property var modelData
+              required property int index
               width: parent.width
               height: 92
               borderSpec: Border.flat(index === root.selectedSceneIndex ? root.accent : root.alpha(root.foreground, 0.18), 1)
@@ -949,12 +952,12 @@ Item {
                 anchors.fill: parent
                 anchors.margins: 14
                 spacing: 14
-                Text { width: 34; text: modelData.icon === "code" ? "󰆍" : (modelData.icon === "browser" ? "󰖟" : (modelData.icon === "chat" ? "󰭻" : "󰈙")); color: index === root.selectedSceneIndex ? root.accent : root.foreground; font.family: root.fontFamily; font.pixelSize: 26; anchors.verticalCenter: parent.verticalCenter }
+                Text { width: 34; text: modelData.icon === "code" ? "󰆍" : (modelData.icon === "browser" ? "󰖟" : (modelData.icon === "chat" ? "󰭻" : "󰈙")); color: index === root.selectedSceneIndex ? Color.accent : Color.foreground; font.family: root.fontFamily; font.pixelSize: 26; anchors.verticalCenter: parent.verticalCenter }
                 Column { width: parent.width - 130; anchors.verticalCenter: parent.verticalCenter; spacing: 6; BodyText { text: String(modelData.name || ""); font.pixelSize: Style.font.subtitle; font.bold: true } MutedText { width: parent.width; text: String(modelData.description || ""); elide: Text.ElideRight } }
                 ToggleSwitch {
                   anchors.verticalCenter: parent.verticalCenter
                   checked: modelData.enabled === true
-                  foreground: root.foreground
+                  foreground: modelData.enabled === true ? root.accent : root.foreground
                   accent: root.accent
                   onToggled: root.runAction(["scene-toggle", String(modelData.id), String(!modelData.enabled)], "scenes")
                 }
