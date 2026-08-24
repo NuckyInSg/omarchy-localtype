@@ -190,13 +190,49 @@ class PluginContractTests(unittest.TestCase):
             self.assertEqual(scenes[0]["id"], "codex")
             self.assertFalse(scenes[0]["auto_submit"])
 
+            settings = json.loads(
+                subprocess.check_output([str(store), "settings-show"], text=True, env=environment)
+            )
+            self.assertEqual(settings["language"], "en")
+            self.assertEqual(settings["smart_shortcut"], "F9")
+            self.assertEqual(settings["raw_shortcut"], "SHIFT + F9")
+
+    def test_shortcuts_are_persisted_and_rendered_into_managed_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            bindings = root / "bindings.lua"
+            bindings.write_text("-- existing bindings\n", encoding="utf-8")
+            self.write_executable(
+                fake_bin / "hyprctl",
+                'if [[ "$1" == "configerrors" ]]; then printf ""; fi\n',
+            )
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:/usr/bin"
+            environment["LOCALTYPE_CONFIG_HOME"] = str(root / "config")
+            environment["LOCALTYPE_HYPR_BINDINGS"] = str(bindings)
+            result = subprocess.run(
+                [str(PLUGIN / "bin/localtypectl"), "shortcuts-set", "ctrl + space", "shift + f8"],
+                text=True,
+                capture_output=True,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            managed = bindings.read_text(encoding="utf-8")
+            self.assertIn('o.bind("CTRL + SPACE"', managed)
+            self.assertIn('o.bind("SHIFT + F8"', managed)
+            settings = json.loads((root / "config/settings.json").read_text(encoding="utf-8"))
+            self.assertEqual(settings["smart_shortcut"], "CTRL + SPACE")
+            self.assertEqual(settings["raw_shortcut"], "SHIFT + F8")
+
     def test_installer_has_idempotent_managed_integration(self) -> None:
         controller = (PLUGIN / "bin/localtypectl").read_text(encoding="utf-8")
         self.assertIn("LocalType (managed; edit through the plugin)", controller)
         self.assertIn(".requirements.sha256", controller)
         self.assertIn(".bak.localtype-", controller)
-        self.assertIn('o.bind("F9"', controller)
-        self.assertIn('o.bind("SHIFT + F9"', controller)
+        self.assertIn("configured_shortcuts()", controller)
+        self.assertIn('"shortcuts-set"', controller)
         self.assertIn('title = "^LocalType$"', controller)
         self.assertIn("size = { 1400, 980 }", controller)
         self.assertIn("localtype.desktop", controller)

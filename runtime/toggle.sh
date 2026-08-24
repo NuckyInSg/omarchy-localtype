@@ -11,18 +11,28 @@ health_url="${LOCALTYPE_HEALTH_URL:-http://127.0.0.1:8765/health}"
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 state_cmd="$script_dir/state.py"
 store_cmd="$script_dir/store.py"
+settings_json=$($store_cmd settings-show 2>/dev/null || printf '{}')
+language=$(jq -r '.language // "en"' <<<"$settings_json")
+smart_shortcut=$(jq -r '.smart_shortcut // "F9"' <<<"$settings_json")
+raw_shortcut=$(jq -r '.raw_shortcut // "SHIFT + F9"' <<<"$settings_json")
+display_shortcut() {
+  sed -E 's/[[:space:]]*\+[[:space:]]*/+/g; s/SHIFT/Shift/g; s/CTRL/Ctrl/g; s/ALT/Alt/g; s/SUPER/Super/g' <<<"$1"
+}
+message() {
+  if [[ "$language" == "zh" ]]; then printf '%s' "$2"; else printf '%s' "$1"; fi
+}
 mkdir -p "$runtime_dir"
 
 record_failure() {
   local code=$?
-  "$state_cmd" set error --mode "$requested_mode" --error "听写失败（exit $code）" >/dev/null 2>&1 || true
+  "$state_cmd" set error --mode "$requested_mode" --error "$(message "Dictation failed (exit $code)" "听写失败（exit $code）")" >/dev/null 2>&1 || true
   exit "$code"
 }
 trap record_failure ERR
 
 if systemctl --user is-active --quiet "$record_unit"; then
   systemctl --user stop "$record_unit"
-  notify-send -a "LocalType" "正在识别…"
+  notify-send -a "LocalType" "$(message "Transcribing locally…" "正在识别…")"
   mode=$(cat "$mode_file" 2>/dev/null || printf 'smart')
   "$state_cmd" set processing --mode "$mode"
   focused_window=$(hyprctl activewindow -j)
@@ -78,12 +88,12 @@ if systemctl --user is-active --quiet "$record_unit"; then
       --application-class "$focused_class" --application-title "$focused_title"
     rm -f "$started_file"
   else
-    "$state_cmd" set error --mode "$mode" --error "没有识别到文字"
-    notify-send -u critical -a "LocalType" "没有识别到文字"
+    "$state_cmd" set error --mode "$mode" --error "$(message "No speech was recognized" "没有识别到文字")"
+    notify-send -u critical -a "LocalType" "$(message "No speech was recognized" "没有识别到文字")"
   fi
 else
   if ! curl --fail --silent --max-time 2 "$health_url" >/dev/null; then
-    notify-send -u critical -a "LocalType" "模型尚未就绪，请稍后再试"
+    notify-send -u critical -a "LocalType" "$(message "Models are not ready yet. Please try again shortly." "模型尚未就绪，请稍后再试")"
     exit 1
   fi
 
@@ -94,8 +104,8 @@ else
     /usr/bin/pw-record --rate 16000 --channels 1 --format s16 "$audio_file"
   "$state_cmd" set recording --mode "$requested_mode"
   if [[ "$requested_mode" == "smart" ]]; then
-    notify-send -a "LocalType" "开始智能听写，再按 F9 结束"
+    notify-send -a "LocalType" "$(message "Smart dictation started. Press $(display_shortcut "$smart_shortcut") again to stop." "开始智能听写，再按 $(display_shortcut "$smart_shortcut") 结束")"
   else
-    notify-send -a "LocalType" "开始原文听写，再按 Shift+F9 结束"
+    notify-send -a "LocalType" "$(message "Verbatim dictation started. Press $(display_shortcut "$raw_shortcut") again to stop." "开始原文听写，再按 $(display_shortcut "$raw_shortcut") 结束")"
   fi
 fi

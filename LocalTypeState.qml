@@ -39,7 +39,7 @@ Item {
       root.actionError = ""
       root.refreshed()
     } catch (error) {
-      root.actionError = "状态数据无法解析"
+      root.actionError = "Status data could not be parsed"
     }
   }
 

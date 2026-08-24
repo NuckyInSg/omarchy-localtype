@@ -43,6 +43,7 @@ DICTIONARY_DEFAULT = PLUGIN_ROOT / "config/dictionary.json"
 DICTIONARY = CONFIG_HOME / "dictionary.json"
 STATE_FILE = STATE_HOME / "status.json"
 HISTORY_FILE = STATE_HOME / "history.json"
+SETTINGS_FILE = CONFIG_HOME / "settings.json"
 SERVICE_FILE = SYSTEMD_HOME / "localtype.service"
 RECORDING = RUNTIME_HOME / "recording.wav"
 LOCK_FILE = RUNTIME_HOME / "install.lock"
@@ -88,6 +89,22 @@ def saved_state() -> dict:
         return value if isinstance(value, dict) else {}
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
+
+
+def saved_settings() -> dict:
+    try:
+        value = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def language() -> str:
+    return "zh" if saved_settings().get("language") == "zh" else "en"
+
+
+def localized(english: str, chinese: str) -> str:
+    return chinese if language() == "zh" else english
 
 
 def set_state(status: str, *, mode: str | None = None, detail: str | None = None, error: str | None = None) -> None:
@@ -217,13 +234,31 @@ StartupNotify=false
     write_if_changed(DESKTOP_ENTRY, contents)
 
 
+def normalize_shortcut(value: str) -> str:
+    shortcut = re.sub(r"\s*\+\s*", " + ", value.strip().upper())
+    shortcut = re.sub(r"\s+", " ", shortcut)
+    if not shortcut or len(shortcut) > 48 or not re.fullmatch(r"[A-Z0-9 +_-]+", shortcut):
+        raise ValueError("Shortcut may only contain key names, numbers, spaces, +, _ and -")
+    return shortcut
+
+
+def configured_shortcuts() -> tuple[str, str]:
+    settings = saved_settings()
+    return (
+        normalize_shortcut(str(settings.get("smart_shortcut", "F9"))),
+        normalize_shortcut(str(settings.get("raw_shortcut", "SHIFT + F9"))),
+    )
+
+
 def managed_bindings() -> str:
     launcher = str(LAUNCHER)
+    smart_shortcut, raw_shortcut = configured_shortcuts()
     return (
         f"{BINDINGS_START}\n"
-        'hl.unbind("F9")\n'
-        f'o.bind("F9", "LocalType smart dictation", "{launcher} toggle smart")\n'
-        f'o.bind("SHIFT + F9", "LocalType verbatim dictation", "{launcher} toggle raw")\n'
+        f'hl.unbind("{smart_shortcut}")\n'
+        f'hl.unbind("{raw_shortcut}")\n'
+        f'o.bind("{smart_shortcut}", "LocalType smart dictation", "{launcher} toggle smart")\n'
+        f'o.bind("{raw_shortcut}", "LocalType verbatim dictation", "{launcher} toggle raw")\n'
         f"{BINDINGS_END}\n"
     )
 
@@ -621,7 +656,7 @@ def main() -> int:
         except FileNotFoundError:
             pass
         set_state("idle", detail="Recording cancelled")
-        notify("录音已取消", "没有输入任何文字")
+        notify(localized("Recording cancelled", "录音已取消"), localized("No text was entered", "没有输入任何文字"))
         return 0
     if command in ("start", "stop", "restart"):
         if command in ("start", "restart") and not SERVICE_FILE.exists():
@@ -636,13 +671,42 @@ def main() -> int:
         text = str(saved_state().get("last_text", ""))
         if text:
             run(["wl-copy"], check=True, input_text=text)
-            notify("已复制", "最近一次听写已复制到剪贴板")
+            notify(localized("Copied", "已复制"), localized("Latest dictation copied to the clipboard", "最近一次听写已复制到剪贴板"))
         return 0
     if command == "copy-text":
         text = sys.argv[2] if len(sys.argv) > 2 else ""
         if text:
             run(["wl-copy"], check=True, input_text=text)
-            notify("已复制", "文字已复制到剪贴板")
+            notify(localized("Copied", "已复制"), localized("Text copied to the clipboard", "文字已复制到剪贴板"))
+        return 0
+    if command == "shortcuts-set":
+        if len(sys.argv) < 4:
+            raise SystemExit("usage: localtypectl shortcuts-set SMART RAW")
+        try:
+            smart_shortcut = normalize_shortcut(sys.argv[2])
+            raw_shortcut = normalize_shortcut(sys.argv[3])
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        if smart_shortcut == raw_shortcut:
+            print("Smart and verbatim shortcuts must be different", file=sys.stderr)
+            return 2
+        previous_smart, previous_raw = configured_shortcuts()
+        result = run([str(STORE_HELPER), "shortcuts-set", smart_shortcut, raw_shortcut])
+        if result.returncode != 0:
+            print(result.stderr.strip(), file=sys.stderr)
+            return result.returncode
+        try:
+            install_bindings()
+        except Exception as error:
+            run([str(STORE_HELPER), "shortcuts-set", previous_smart, previous_raw])
+            try:
+                install_bindings()
+            except Exception:
+                pass
+            print(str(error), file=sys.stderr)
+            return 1
+        print(localized("Shortcuts updated", "快捷键已更新"))
         return 0
     store_commands = {
         "history-list",

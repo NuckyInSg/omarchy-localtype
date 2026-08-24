@@ -96,7 +96,10 @@ DEFAULT_SCENES = [
 ]
 
 DEFAULT_SETTINGS = {
+    "language": "en",
     "default_mode": "smart",
+    "smart_shortcut": "F9",
+    "raw_shortcut": "SHIFT + F9",
     "keep_history": True,
     "history_days": 30,
     "launch_at_startup": True,
@@ -232,6 +235,9 @@ def main() -> None:
     setting_set = subparsers.add_parser("setting-set")
     setting_set.add_argument("key")
     setting_set.add_argument("value")
+    shortcuts_set = subparsers.add_parser("shortcuts-set")
+    shortcuts_set.add_argument("smart")
+    shortcuts_set.add_argument("raw")
 
     args = parser.parse_args()
 
@@ -285,6 +291,13 @@ def main() -> None:
             settings[args.key] = max(1, int(args.value))
         elif args.key == "default_mode" and args.value in {"smart", "raw"}:
             settings[args.key] = args.value
+        elif args.key == "language" and args.value in {"en", "zh"}:
+            settings[args.key] = args.value
+        write_json(SETTINGS_PATH, settings)
+    elif args.command == "shortcuts-set":
+        settings = read_json(SETTINGS_PATH, DEFAULT_SETTINGS)
+        settings["smart_shortcut"] = args.smart
+        settings["raw_shortcut"] = args.raw
         write_json(SETTINGS_PATH, settings)
 
 

@@ -21,36 +21,50 @@ Panel {
 
   property string selectedMode: String(setting("defaultMode", "Smart")) === "Verbatim" ? "raw" : "smart"
   property bool cursorActive: false
+  property var localSettings: ({})
+  readonly property string language: String(localSettings.language || "en")
 
   function alpha(color, opacity) { return Qt.rgba(color.r, color.g, color.b, opacity) }
   function clamp(value, minimum, maximum) { return Math.max(minimum, Math.min(maximum, value)) }
+  function l(english, chinese) { return language === "zh" ? chinese : english }
+  function shortcut(mode) {
+    var value = String(mode === "smart" ? (localSettings.smart_shortcut || "F9") : (localSettings.raw_shortcut || "SHIFT + F9"))
+    return value.replace(/\s*\+\s*/g, "+").replace("SHIFT", "Shift").replace("CTRL", "Ctrl").replace("ALT", "Alt").replace("SUPER", "Super")
+  }
+  function applySettings(output) {
+    try {
+      var value = JSON.parse(String(output || "{}"))
+      localSettings = value && typeof value === "object" ? value : ({})
+      selectedMode = String(localSettings.default_mode || "smart")
+    } catch (error) { /* Keep English defaults if settings are unavailable. */ }
+  }
 
   function phaseTitle() {
-    if (runtimeState.recording) return "Listening"
-    if (runtimeState.processing) return "Processing"
-    if (runtimeState.installing) return "Installing local engine"
-    if (runtimeState.phase === "error") return "Needs attention"
-    if (!runtimeState.serviceActive) return "Service offline"
-    if (!runtimeState.backendReady) return "Loading models"
-    return "Ready"
+    if (runtimeState.recording) return l("Listening", "正在聆听")
+    if (runtimeState.processing) return l("Processing", "正在处理")
+    if (runtimeState.installing) return l("Installing local engine", "正在安装本地引擎")
+    if (runtimeState.phase === "error") return l("Needs attention", "需要处理")
+    if (!runtimeState.serviceActive) return l("Service offline", "服务离线")
+    if (!runtimeState.backendReady) return l("Loading models", "正在加载模型")
+    return l("Ready", "就绪")
   }
 
   function phaseMeta() {
-    if (runtimeState.recording) return selectedMode === "smart" ? "SMART DICTATION" : "VERBATIM DICTATION"
-    if (runtimeState.processing) return "TRANSCRIBING LOCALLY"
-    if (runtimeState.installing) return "FIRST-RUN SETUP"
-    if (runtimeState.phase === "error") return "LAST REQUEST FAILED"
-    if (!runtimeState.serviceActive) return "START THE LOCAL SERVICE"
-    if (!runtimeState.backendReady) return "GPU WARMING UP"
-    return "LOCAL · PRIVATE · CHINESE"
+    if (runtimeState.recording) return selectedMode === "smart" ? l("SMART DICTATION", "智能听写") : l("VERBATIM DICTATION", "原文听写")
+    if (runtimeState.processing) return l("TRANSCRIBING LOCALLY", "正在本地识别")
+    if (runtimeState.installing) return l("FIRST-RUN SETUP", "首次运行设置")
+    if (runtimeState.phase === "error") return l("LAST REQUEST FAILED", "上次请求失败")
+    if (!runtimeState.serviceActive) return l("START THE LOCAL SERVICE", "启动本地服务")
+    if (!runtimeState.backendReady) return l("GPU WARMING UP", "GPU 正在预热")
+    return l("LOCAL · PRIVATE · CHINESE", "本地 · 私密 · 中文")
   }
 
   function actionLabel() {
-    if (runtimeState.recording) return "Stop & type"
-    if (runtimeState.installing || runtimeState.processing || runtimeState.actionRunning) return "Working…"
-    if (!runtimeState.serviceActive) return "Start service"
-    if (!runtimeState.backendReady) return "Models are loading"
-    return selectedMode === "smart" ? "Start smart dictation" : "Start verbatim dictation"
+    if (runtimeState.recording) return l("Stop & type", "停止并输入")
+    if (runtimeState.installing || runtimeState.processing || runtimeState.actionRunning) return l("Working…", "处理中…")
+    if (!runtimeState.serviceActive) return l("Start service", "启动服务")
+    if (!runtimeState.backendReady) return l("Models are loading", "模型正在加载")
+    return selectedMode === "smart" ? l("Start smart dictation", "开始智能听写") : l("Start verbatim dictation", "开始原文听写")
   }
 
   function actionIcon() {
@@ -83,7 +97,7 @@ Panel {
 
   function lastText() {
     var value = String(runtimeState.record.last_text || "")
-    return value === "" ? "Your latest dictation will appear here." : value
+    return value === "" ? l("Your latest dictation will appear here.", "最近一次听写会显示在这里。") : value
   }
 
   function errorText() {
@@ -98,6 +112,7 @@ Panel {
   onOpenedChanged: if (opened) {
     cursorActive = false
     runtimeState.refresh()
+    if (!settingsProcess.running) settingsProcess.running = true
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -106,6 +121,18 @@ Panel {
     ctlPath: root.resolvedCtlPath
     refreshInterval: Number(root.setting("refreshIntervalMs", 3000))
   }
+
+  Process {
+    id: settingsProcess
+    running: false
+    command: [root.resolvedCtlPath, "settings-show"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applySettings(text)
+    }
+  }
+
+  Component.onCompleted: settingsProcess.running = true
 
   IpcHandler {
     target: root.ipcTarget
@@ -126,7 +153,7 @@ Panel {
     bar: root.bar
     text: runtimeState.serviceActive ? "󰍬" : "󰍭"
     active: runtimeState.recording || runtimeState.processing
-    tooltipText: runtimeState.recording ? "LocalType is listening" : (runtimeState.backendReady ? "LocalType ready" : "LocalType offline")
+    tooltipText: runtimeState.recording ? root.l("LocalType is listening", "LocalType 正在聆听") : (runtimeState.backendReady ? root.l("LocalType ready", "LocalType 已就绪") : root.l("LocalType offline", "LocalType 离线"))
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.runPrimaryAction()
       else if (buttonCode === Qt.MiddleButton) {
@@ -209,7 +236,7 @@ Panel {
             spacing: Style.space(10)
 
             PanelSectionHeader {
-              text: "STATUS"
+              text: root.l("STATUS", "状态")
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -230,7 +257,7 @@ Panel {
 
               Text {
                 id: statusValue
-                text: runtimeState.installing ? "INSTALLING" : (runtimeState.backendReady ? "GPU" : (runtimeState.serviceActive ? "LOADING" : "OFFLINE"))
+                text: runtimeState.installing ? root.l("INSTALLING", "安装中") : (runtimeState.backendReady ? "GPU" : (runtimeState.serviceActive ? root.l("LOADING", "加载中") : root.l("OFFLINE", "离线")))
                 color: runtimeState.backendReady ? root.foreground : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -286,7 +313,7 @@ Panel {
             spacing: Style.spacing.md
 
             PanelSectionHeader {
-              text: "DICTATION"
+              text: root.l("DICTATION", "听写")
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -297,7 +324,7 @@ Panel {
 
               Button {
                 width: (parent.width - parent.spacing) / 2
-                text: "SMART"
+                text: root.l("SMART", "智能")
                 iconText: "󰧑"
                 selected: root.selectedMode === "smart"
                 hasCursor: root.cursorActive && root.selectedMode === "smart"
@@ -313,7 +340,7 @@ Panel {
 
               Button {
                 width: (parent.width - parent.spacing) / 2
-                text: "VERBATIM"
+                text: root.l("VERBATIM", "原文")
                 iconText: "󰑋"
                 selected: root.selectedMode === "raw"
                 hasCursor: root.cursorActive && root.selectedMode === "raw"
@@ -349,7 +376,7 @@ Panel {
               Button {
                 visible: runtimeState.recording
                 width: parent.width
-                text: "Cancel recording"
+                text: root.l("Cancel recording", "取消录音")
                 iconText: "󰅖"
                 bordered: true
                 foreground: root.urgent
@@ -362,8 +389,8 @@ Panel {
             Text {
               width: parent.width
               text: root.selectedMode === "smart"
-                ? "F9 · removes filler words and fixes punctuation"
-                : "Shift+F9 · preserves the recognized wording"
+                ? root.shortcut("smart") + root.l(" · removes filler words and fixes punctuation", " · 去除语气词并修正标点")
+                : root.shortcut("raw") + root.l(" · preserves the recognized wording", " · 忠实保留识别原文")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -382,7 +409,7 @@ Panel {
             spacing: Style.spacing.md
 
             PanelSectionHeader {
-              text: "RECENT"
+              text: root.l("RECENT", "最近听写")
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -421,7 +448,7 @@ Panel {
             Text {
               visible: String(runtimeState.record.last_text || "") !== ""
               width: parent.width
-              text: "Click the card to copy it"
+              text: root.l("Click the card to copy it", "点击卡片即可复制")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -436,7 +463,7 @@ Panel {
             spacing: Style.spacing.md
 
             PanelSectionHeader {
-              text: "MODELS"
+              text: root.l("MODELS", "模型")
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
@@ -444,14 +471,14 @@ Panel {
             ModelRow {
               width: parent.width
               name: "Qwen3-ASR-1.7B"
-              role: "SPEECH"
+              role: root.l("SPEECH", "识别")
               fill: 1
             }
 
             ModelRow {
               width: parent.width
               name: "Qwen3-0.6B"
-              role: "POLISH"
+              role: root.l("POLISH", "润色")
               fill: 0.68
             }
           }
@@ -462,7 +489,7 @@ Panel {
 
             Button {
               width: (parent.width - parent.spacing) / 2
-              text: "Open app"
+              text: root.l("Open app", "打开应用")
               iconText: "󰆍"
               bordered: true
               foreground: root.foreground
@@ -476,7 +503,7 @@ Panel {
 
             Button {
               width: (parent.width - parent.spacing) / 2
-              text: "Restart service"
+              text: root.l("Restart service", "重启服务")
               iconText: "󰜉"
               bordered: true
               foreground: root.foreground
@@ -488,7 +515,7 @@ Panel {
 
           Text {
             width: parent.width
-            text: root.shortGpuName() + " · audio stays on this device"
+            text: root.shortGpuName() + root.l(" · audio stays on this device", " · 音频不会离开本机")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
