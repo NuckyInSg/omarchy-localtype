@@ -197,6 +197,8 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn(".bak.localtype-", controller)
         self.assertIn('o.bind("F9"', controller)
         self.assertIn('o.bind("SHIFT + F9"', controller)
+        self.assertIn('title = "^LocalType$"', controller)
+        self.assertIn("size = { 1400, 980 }", controller)
         self.assertIn("localtype.desktop", controller)
         self.assertIn('"open"', controller)
 

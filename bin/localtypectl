@@ -26,6 +26,7 @@ STATE_HOME = Path(os.environ.get("LOCALTYPE_STATE_HOME", Path(os.environ.get("XD
 RUNTIME_HOME = Path(os.environ.get("LOCALTYPE_RUNTIME_HOME", Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "localtype"))
 SYSTEMD_HOME = Path(os.environ.get("LOCALTYPE_SYSTEMD_HOME", HOME / ".config/systemd/user"))
 HYPR_BINDINGS = Path(os.environ.get("LOCALTYPE_HYPR_BINDINGS", HOME / ".config/hypr/bindings.lua"))
+HYPR_CONFIG = Path(os.environ.get("LOCALTYPE_HYPR_CONFIG", HOME / ".config/hypr/hyprland.lua"))
 LAUNCHER = Path(os.environ.get("LOCALTYPE_LAUNCHER", HOME / ".local/bin/localtypectl"))
 DESKTOP_ENTRY = Path(
     os.environ.get(
@@ -51,6 +52,8 @@ HEALTH_URL = os.environ.get("LOCALTYPE_HEALTH_URL", "http://127.0.0.1:8765/healt
 
 BINDINGS_START = "-- >>> LocalType (managed; edit through the plugin)"
 BINDINGS_END = "-- <<< LocalType"
+WINDOWS_START = "-- >>> LocalType window (managed; edit through the plugin)"
+WINDOWS_END = "-- <<< LocalType window"
 
 
 def run(
@@ -290,6 +293,54 @@ def remove_bindings() -> None:
             run(["hyprctl", "reload"], timeout=5)
 
 
+def managed_window_rules() -> str:
+    return (
+        f"{WINDOWS_START}\n"
+        'o.window({ class = "^org\\\\.quickshell$", title = "^LocalType$" }, '
+        '{ float = true, center = true, size = { 1400, 980 } })\n'
+        f"{WINDOWS_END}\n"
+    )
+
+
+def strip_managed_window_rules(contents: str) -> str:
+    pattern = re.compile(
+        rf"(?ms)^\s*{re.escape(WINDOWS_START)}\n.*?^\s*{re.escape(WINDOWS_END)}\s*\n?"
+    )
+    return pattern.sub("", contents)
+
+
+def install_window_rules() -> None:
+    if not HYPR_CONFIG.exists():
+        raise RuntimeError(f"Hyprland config file not found: {HYPR_CONFIG}")
+    original = HYPR_CONFIG.read_text(encoding="utf-8")
+    updated = strip_managed_window_rules(original).rstrip() + "\n\n" + managed_window_rules()
+    if updated == original:
+        return
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = HYPR_CONFIG.with_name(f"{HYPR_CONFIG.name}.bak.localtype-{stamp}")
+    backup.write_text(original, encoding="utf-8")
+    before_errors = hypr_config_errors()
+    write_if_changed(HYPR_CONFIG, updated)
+    if command_exists("hyprctl"):
+        run(["hyprctl", "reload"], timeout=5)
+        after_errors = hypr_config_errors()
+        if after_errors and after_errors != before_errors:
+            write_if_changed(HYPR_CONFIG, original)
+            run(["hyprctl", "reload"], timeout=5)
+            raise RuntimeError(f"Hyprland rejected LocalType window rule: {after_errors}")
+
+
+def remove_window_rules() -> None:
+    if not HYPR_CONFIG.exists():
+        return
+    original = HYPR_CONFIG.read_text(encoding="utf-8")
+    updated = strip_managed_window_rules(original).rstrip() + "\n"
+    if updated != original:
+        write_if_changed(HYPR_CONFIG, updated)
+        if command_exists("hyprctl"):
+            run(["hyprctl", "reload"], timeout=5)
+
+
 def requirements_digest() -> str:
     return hashlib.sha256(REQUIREMENTS.read_bytes()).hexdigest()
 
@@ -361,6 +412,7 @@ def ensure_runtime() -> int:
             install_launcher()
             install_desktop_entry()
             install_bindings()
+            install_window_rules()
 
             venv = selected_venv()
             hf_home = selected_hf_home()
@@ -482,6 +534,7 @@ def uninstall(purge: bool) -> int:
         SERVICE_FILE.unlink()
         run(["systemctl", "--user", "daemon-reload"])
     remove_bindings()
+    remove_window_rules()
     if LAUNCHER.is_symlink() and LAUNCHER.resolve() == Path(__file__).resolve():
         LAUNCHER.unlink()
     if DESKTOP_ENTRY.exists():
