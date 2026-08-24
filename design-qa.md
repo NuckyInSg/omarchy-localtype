@@ -28,6 +28,9 @@ passed
 - Full History: `qa/history-comparison-final.png`
 - Full Scenes: `qa/scenes-comparison-final.png`
 - Final six-page contact sheet: `qa/final-contact-sheet.png`
+- English six-page contact sheet: `qa/i18n/english-contact-sheet.png`
+- English Settings: `qa/i18n/settings-en-final.png`
+- Simplified Chinese Settings: `qa/i18n/settings-zh.png`
 
 Each comparison places the normalized reference on the left and the running implementation on the right.
 
@@ -39,5 +42,7 @@ Each comparison places the normalized reference on the left and the running impl
 4. Corrected History delegate width/height and exposed both polished and original text without clipping.
 5. Loaded the latest persisted transcript on Workspace and made its copy action use the visible text.
 6. Removed a two-second QML refresh warning found during runtime log inspection.
+7. Verified all six pages in the English-default locale and the Settings page in Simplified Chinese.
+8. Shortened English mode-card labels after the first locale pass exposed an overflow at 1400 × 980.
 
 No P0, P1, or P2 visual or interaction issues remain in the tested viewport. Differences from the mockups are limited to real user data volume and Omarchy's theme-native toggle treatment, both intentional.
