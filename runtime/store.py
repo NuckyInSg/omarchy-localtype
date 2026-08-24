@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Atomic local data store for LocalType desktop features."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import tempfile
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def config_home() -> Path:
+    explicit = os.environ.get("LOCALTYPE_CONFIG_HOME")
+    if explicit:
+        return Path(explicit)
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "localtype"
+
+
+def state_home() -> Path:
+    explicit = os.environ.get("LOCALTYPE_STATE_HOME")
+    if explicit:
+        return Path(explicit)
+    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "localtype"
+
+
+DICTIONARY_PATH = config_home() / "dictionary.json"
+SCENES_PATH = config_home() / "scenes.json"
+SETTINGS_PATH = config_home() / "settings.json"
+HISTORY_PATH = state_home() / "history.json"
+
+DEFAULT_DICTIONARY = {
+    "泰普勒式": "Typeless",
+    "泰普勒斯": "Typeless",
+}
+
+DEFAULT_SCENES = [
+    {
+        "id": "codex",
+        "name": "Codex",
+        "icon": "code",
+        "description": "保留技术名词与命令，使用简洁 Markdown",
+        "style": "技术",
+        "enabled": True,
+        "preserve_code": True,
+        "markdown": True,
+        "remove_fillers": True,
+        "auto_submit": False,
+        "prompt": "保持技术术语、文件路径和命令不变；优先输出简洁、可执行的句子。",
+        "classes": "codex, Alacritty, com.mitchellh.ghostty",
+    },
+    {
+        "id": "chromium",
+        "name": "Chromium",
+        "icon": "browser",
+        "description": "通用润色，自动补充标点",
+        "style": "通用",
+        "enabled": True,
+        "preserve_code": False,
+        "markdown": False,
+        "remove_fillers": True,
+        "auto_submit": False,
+        "prompt": "使用自然、清晰的中文，修正标点和明显口误。",
+        "classes": "chromium, google-chrome",
+    },
+    {
+        "id": "slack",
+        "name": "Slack",
+        "icon": "chat",
+        "description": "更口语、更简短，不生成标题",
+        "style": "聊天",
+        "enabled": True,
+        "preserve_code": True,
+        "markdown": False,
+        "remove_fillers": True,
+        "auto_submit": False,
+        "prompt": "保持口语自然，句子简短，不添加标题。",
+        "classes": "Slack, slack",
+    },
+    {
+        "id": "obsidian",
+        "name": "Obsidian",
+        "icon": "document",
+        "description": "整理段落，可生成列表与小标题",
+        "style": "笔记",
+        "enabled": True,
+        "preserve_code": True,
+        "markdown": True,
+        "remove_fillers": True,
+        "auto_submit": False,
+        "prompt": "整理段落结构；必要时使用列表和简短小标题。",
+        "classes": "obsidian",
+    },
+]
+
+DEFAULT_SETTINGS = {
+    "default_mode": "smart",
+    "keep_history": True,
+    "history_days": 30,
+    "launch_at_startup": True,
+    "prewarm_models": True,
+    "terminal_paste": True,
+}
+
+
+def read_json(path: Path, fallback):
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(value, type(fallback)):
+            return value
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return json.loads(json.dumps(fallback, ensure_ascii=False))
+
+
+def write_json(path: Path, value) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.stem}.", suffix=".json", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def dictionary_entries() -> list[dict]:
+    mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
+    return [
+        {"spoken": spoken, "written": written}
+        for spoken, written in sorted(mapping.items(), key=lambda item: item[1].lower())
+    ]
+
+
+def history_entries(query: str = "") -> list[dict]:
+    entries = read_json(HISTORY_PATH, [])
+    if not query:
+        return entries
+    needle = query.casefold()
+    return [
+        entry
+        for entry in entries
+        if needle in str(entry.get("raw_text", "")).casefold()
+        or needle in str(entry.get("final_text", "")).casefold()
+        or needle in str(entry.get("application_title", "")).casefold()
+    ]
+
+
+def add_history(args: argparse.Namespace) -> None:
+    settings = read_json(SETTINGS_PATH, DEFAULT_SETTINGS)
+    if not settings.get("keep_history", True):
+        return
+    entries = read_json(HISTORY_PATH, [])
+    now = datetime.now(timezone.utc)
+    entries.insert(
+        0,
+        {
+            "id": f"{now.isoformat()}-{uuid.uuid4().hex[:6]}",
+            "created_at": now.isoformat(),
+            "mode": args.mode,
+            "application_class": args.application_class,
+            "application_title": args.application_title or args.application_class or "当前应用",
+            "scene": args.scene,
+            "raw_text": args.raw_text,
+            "final_text": args.final_text,
+            "polished": args.polished,
+            "output_status": "typed",
+            "duration_ms": args.duration_ms,
+            "processing_ms": args.processing_ms,
+        },
+    )
+    write_json(HISTORY_PATH, entries[:200])
+
+
+def scene_by_id(scene_id: str) -> tuple[list[dict], dict | None]:
+    scenes = read_json(SCENES_PATH, DEFAULT_SCENES)
+    return scenes, next((scene for scene in scenes if scene.get("id") == scene_id), None)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    history_list = subparsers.add_parser("history-list")
+    history_list.add_argument("--query", default="")
+    history_add = subparsers.add_parser("history-add")
+    history_add.add_argument("--mode", choices=("smart", "raw"), required=True)
+    history_add.add_argument("--application-class", default="")
+    history_add.add_argument("--application-title", default="")
+    history_add.add_argument("--scene", default="general")
+    history_add.add_argument("--raw-text", required=True)
+    history_add.add_argument("--final-text", required=True)
+    history_add.add_argument("--polished", action="store_true")
+    history_add.add_argument("--duration-ms", type=int, default=0)
+    history_add.add_argument("--processing-ms", type=int, default=0)
+    history_delete = subparsers.add_parser("history-delete")
+    history_delete.add_argument("id")
+    subparsers.add_parser("history-clear")
+
+    subparsers.add_parser("dictionary-list")
+    dictionary_set = subparsers.add_parser("dictionary-set")
+    dictionary_set.add_argument("spoken")
+    dictionary_set.add_argument("written")
+    dictionary_delete = subparsers.add_parser("dictionary-delete")
+    dictionary_delete.add_argument("spoken")
+
+    subparsers.add_parser("scenes-list")
+    scene_toggle = subparsers.add_parser("scene-toggle")
+    scene_toggle.add_argument("id")
+    scene_toggle.add_argument("enabled", choices=("true", "false"))
+    scene_set = subparsers.add_parser("scene-set")
+    scene_set.add_argument("id")
+    scene_set.add_argument("field")
+    scene_set.add_argument("value")
+    scene_save = subparsers.add_parser("scene-save")
+    scene_save.add_argument("id")
+    scene_save.add_argument("style")
+    scene_save.add_argument("prompt")
+    scene_save.add_argument("classes")
+
+    subparsers.add_parser("settings-show")
+    setting_set = subparsers.add_parser("setting-set")
+    setting_set.add_argument("key")
+    setting_set.add_argument("value")
+
+    args = parser.parse_args()
+
+    if args.command == "history-list":
+        print(json.dumps(history_entries(args.query), ensure_ascii=False))
+    elif args.command == "history-add":
+        add_history(args)
+    elif args.command == "history-delete":
+        write_json(HISTORY_PATH, [e for e in history_entries() if e.get("id") != args.id])
+    elif args.command == "history-clear":
+        write_json(HISTORY_PATH, [])
+    elif args.command == "dictionary-list":
+        print(json.dumps(dictionary_entries(), ensure_ascii=False))
+    elif args.command == "dictionary-set":
+        mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
+        mapping[args.spoken] = args.written
+        write_json(DICTIONARY_PATH, mapping)
+    elif args.command == "dictionary-delete":
+        mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
+        mapping.pop(args.spoken, None)
+        write_json(DICTIONARY_PATH, mapping)
+    elif args.command == "scenes-list":
+        print(json.dumps(read_json(SCENES_PATH, DEFAULT_SCENES), ensure_ascii=False))
+    elif args.command == "scene-toggle":
+        scenes, scene = scene_by_id(args.id)
+        if scene is not None:
+            scene["enabled"] = args.enabled == "true"
+            write_json(SCENES_PATH, scenes)
+    elif args.command == "scene-set":
+        scenes, scene = scene_by_id(args.id)
+        if scene is not None:
+            if args.field in {"enabled", "preserve_code", "markdown", "remove_fillers", "auto_submit"}:
+                scene[args.field] = args.value.lower() == "true"
+            elif args.field in {"style", "prompt", "classes"}:
+                scene[args.field] = args.value
+            write_json(SCENES_PATH, scenes)
+    elif args.command == "scene-save":
+        scenes, scene = scene_by_id(args.id)
+        if scene is not None:
+            scene["style"] = args.style
+            scene["prompt"] = args.prompt
+            scene["classes"] = args.classes
+            write_json(SCENES_PATH, scenes)
+    elif args.command == "settings-show":
+        print(json.dumps(read_json(SETTINGS_PATH, DEFAULT_SETTINGS), ensure_ascii=False))
+    elif args.command == "setting-set":
+        settings = read_json(SETTINGS_PATH, DEFAULT_SETTINGS)
+        if args.key in {"keep_history", "launch_at_startup", "prewarm_models", "terminal_paste"}:
+            settings[args.key] = args.value.lower() == "true"
+        elif args.key == "history_days":
+            settings[args.key] = max(1, int(args.value))
+        elif args.key == "default_mode" and args.value in {"smart", "raw"}:
+            settings[args.key] = args.value
+        write_json(SETTINGS_PATH, settings)
+
+
+if __name__ == "__main__":
+    main()

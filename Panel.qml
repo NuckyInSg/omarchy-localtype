@@ -462,13 +462,16 @@ Panel {
 
             Button {
               width: (parent.width - parent.spacing) / 2
-              text: "Dictionary"
-              iconText: "󰌌"
+              text: "Open app"
+              iconText: "󰆍"
               bordered: true
               foreground: root.foreground
               fontFamily: root.fontFamily
               fontSize: Style.font.bodySmall
-              onClicked: runtimeState.runAction(["edit-dictionary"])
+              onClicked: {
+                runtimeState.runAction(["open"])
+                root.close()
+              }
             }
 
             Button {

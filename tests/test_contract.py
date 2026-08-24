@@ -22,9 +22,10 @@ class PluginContractTests(unittest.TestCase):
         manifest = json.loads((PLUGIN / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["schemaVersion"], 1)
         self.assertEqual(manifest["id"], "app.localtype.voice-input")
-        self.assertEqual(manifest["kinds"], ["service", "bar-widget"])
+        self.assertEqual(manifest["kinds"], ["service", "bar-widget", "panel"])
         self.assertEqual(manifest["entryPoints"]["service"], "Service.qml")
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Panel.qml")
+        self.assertEqual(manifest["entryPoints"]["panel"], "Desktop.qml")
 
     def test_status_fixture_round_trips_as_json(self) -> None:
         fixture = {
@@ -138,6 +139,57 @@ class PluginContractTests(unittest.TestCase):
         self.assertTrue(dictionary)
         self.assertTrue(all(isinstance(key, str) and isinstance(value, str) for key, value in dictionary.items()))
 
+    def test_desktop_store_supports_history_dictionary_and_scenes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = os.environ.copy()
+            environment["LOCALTYPE_CONFIG_HOME"] = str(root / "config")
+            environment["LOCALTYPE_STATE_HOME"] = str(root / "state")
+            store = RUNTIME / "store.py"
+
+            subprocess.run(
+                [
+                    str(store),
+                    "history-add",
+                    "--mode",
+                    "smart",
+                    "--application-class",
+                    "foot",
+                    "--application-title",
+                    "Codex",
+                    "--scene",
+                    "codex",
+                    "--raw-text",
+                    "测试原文",
+                    "--final-text",
+                    "测试结果",
+                    "--polished",
+                ],
+                check=True,
+                env=environment,
+            )
+            history = json.loads(
+                subprocess.check_output([str(store), "history-list"], text=True, env=environment)
+            )
+            self.assertEqual(history[0]["application_title"], "Codex")
+            self.assertEqual(history[0]["final_text"], "测试结果")
+
+            subprocess.run(
+                [str(store), "dictionary-set", "欧马奇", "Omarchy"],
+                check=True,
+                env=environment,
+            )
+            dictionary = json.loads(
+                subprocess.check_output([str(store), "dictionary-list"], text=True, env=environment)
+            )
+            self.assertIn({"spoken": "欧马奇", "written": "Omarchy"}, dictionary)
+
+            scenes = json.loads(
+                subprocess.check_output([str(store), "scenes-list"], text=True, env=environment)
+            )
+            self.assertEqual(scenes[0]["id"], "codex")
+            self.assertFalse(scenes[0]["auto_submit"])
+
     def test_installer_has_idempotent_managed_integration(self) -> None:
         controller = (PLUGIN / "bin/localtypectl").read_text(encoding="utf-8")
         self.assertIn("LocalType (managed; edit through the plugin)", controller)
@@ -145,6 +197,8 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn(".bak.localtype-", controller)
         self.assertIn('o.bind("F9"', controller)
         self.assertIn('o.bind("SHIFT + F9"', controller)
+        self.assertIn("localtype.desktop", controller)
+        self.assertIn('"open"', controller)
 
     def test_bootstrap_runs_non_blocking_runtime_setup(self) -> None:
         bootstrap = (PLUGIN / "Service.qml").read_text(encoding="utf-8")
@@ -157,9 +211,11 @@ class PluginContractTests(unittest.TestCase):
             PLUGIN / "Service.qml",
             PLUGIN / "Panel.qml",
             PLUGIN / "LocalTypeState.qml",
+            PLUGIN / "Desktop.qml",
             PLUGIN / "bin/localtypectl",
             PLUGIN / "runtime/server.py",
             PLUGIN / "runtime/state.py",
+            PLUGIN / "runtime/store.py",
             PLUGIN / "runtime/toggle.sh",
         ]
         for path in checked:

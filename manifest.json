@@ -2,19 +2,21 @@
   "schemaVersion": 1,
   "id": "app.localtype.voice-input",
   "name": "LocalType",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "NuckyInSg",
   "license": "MIT",
   "description": "Local-first Chinese smart dictation powered by Qwen3-ASR.",
   "keepLoaded": true,
   "kinds": [
     "service",
-    "bar-widget"
+    "bar-widget",
+    "panel"
   ],
   "activation": "on-demand",
   "entryPoints": {
     "service": "Service.qml",
-    "barWidget": "Panel.qml"
+    "barWidget": "Panel.qml",
+    "panel": "Desktop.qml"
   },
   "barWidget": {
     "displayName": "LocalType",

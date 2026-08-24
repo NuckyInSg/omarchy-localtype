@@ -62,6 +62,10 @@ def main() -> None:
     update.add_argument("--raw-text")
     update.add_argument("--error")
     update.add_argument("--detail")
+    update.add_argument("--duration-ms", type=int)
+    update.add_argument("--processing-ms", type=int)
+    update.add_argument("--application-class")
+    update.add_argument("--application-title")
     update.set_defaults(action="set")
 
     clear = subparsers.add_parser("clear")
@@ -94,6 +98,14 @@ def main() -> None:
         state.pop("error", None)
     if args.detail is not None:
         state["detail"] = args.detail
+    if args.duration_ms is not None:
+        state["duration_ms"] = args.duration_ms
+    if args.processing_ms is not None:
+        state["processing_ms"] = args.processing_ms
+    if args.application_class is not None:
+        state["application_class"] = args.application_class
+    if args.application_title is not None:
+        state["application_title"] = args.application_title
     write_state(state)
 
 
