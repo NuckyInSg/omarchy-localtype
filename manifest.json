@@ -16,7 +16,7 @@
   "entryPoints": {
     "service": "Service.qml",
     "barWidget": "Panel.qml",
-    "panel": "Desktop.qml"
+    "panel": "LocalTypeApp.qml"
   },
   "barWidget": {
     "displayName": "LocalType",

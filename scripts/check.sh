@@ -6,7 +6,7 @@ runtime_dir="$plugin_dir/runtime"
 
 omarchy plugin validate "$plugin_dir"
 /usr/lib/qt6/bin/qmlformat "$plugin_dir/Panel.qml" >/dev/null
-/usr/lib/qt6/bin/qmlformat "$plugin_dir/Desktop.qml" >/dev/null
+/usr/lib/qt6/bin/qmlformat "$plugin_dir/LocalTypeApp.qml" >/dev/null
 /usr/lib/qt6/bin/qmlformat "$plugin_dir/LocalTypeState.qml" >/dev/null
 /usr/lib/qt6/bin/qmlformat "$plugin_dir/Service.qml" >/dev/null
 bash -n "$runtime_dir/toggle.sh"

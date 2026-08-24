@@ -25,7 +25,7 @@ class PluginContractTests(unittest.TestCase):
         self.assertEqual(manifest["kinds"], ["service", "bar-widget", "panel"])
         self.assertEqual(manifest["entryPoints"]["service"], "Service.qml")
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Panel.qml")
-        self.assertEqual(manifest["entryPoints"]["panel"], "Desktop.qml")
+        self.assertEqual(manifest["entryPoints"]["panel"], "LocalTypeApp.qml")
 
     def test_status_fixture_round_trips_as_json(self) -> None:
         fixture = {
@@ -211,7 +211,7 @@ class PluginContractTests(unittest.TestCase):
             PLUGIN / "Service.qml",
             PLUGIN / "Panel.qml",
             PLUGIN / "LocalTypeState.qml",
-            PLUGIN / "Desktop.qml",
+            PLUGIN / "LocalTypeApp.qml",
             PLUGIN / "bin/localtypectl",
             PLUGIN / "runtime/server.py",
             PLUGIN / "runtime/state.py",
