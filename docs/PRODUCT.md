@@ -12,14 +12,15 @@ LocalType 的定位是“面向中文和中英文混合用户的本地智能语�
 
 ## Omarchy MVP
 
-当前版本包含本地推理服务、PipeWire 录音、Hyprland 全局快捷键、用户级 systemd 服务、桌面通知、个人词典和 Omarchy Shell 状态组件。
+当前 0.2 版本包含本地推理服务、PipeWire 录音、Hyprland 全局快捷键、用户级 systemd 服务、桌面通知、Omarchy Shell 状态组件，以及一套原生 Omarchy 桌面应用。桌面端已经覆盖工作台、听写历史、图形化个人词典、应用场景、本地模型状态和设置，并自动继承 Omarchy 主题。
 
 处理链路为：录音 → Qwen3-ASR → 个人词典 → Qwen3-0.6B 保守校对 → 安全长度检查 → 当前应用输入。普通应用使用 `wtype`，终端使用单次 bracketed paste。
 
 ## 路线图
 
 - **0.1 Omarchy MVP**：一键安装、智能/原文听写、状态面板、词典、自检与安全卸载。
-- **0.2 Omarchy 完整体验**：应用级规则、图形化词典、模型切换、录音悬浮反馈和撤回。
+- **0.2 Omarchy 桌面应用（当前）**：应用级规则、图形化词典、模型状态、听写历史和主题联动。
+- **0.3 Omarchy 完整体验**：模型切换、录音悬浮反馈、撤回与更完整的场景自动匹配。
 - **0.5 跨平台 Alpha**：Tauri 2 桌面壳，以及 macOS、Windows 平台适配。
 - **1.0 桌面产品**：macOS、Windows 正式支持，Linux Beta，可选同步与云推理。
 

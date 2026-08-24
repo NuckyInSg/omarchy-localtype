@@ -4,6 +4,8 @@ LocalType 是一个本地优先的中文智能语音输入插件。它使用
 [Qwen3-ASR-1.7B](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) 识别语音，再用
 Qwen3-0.6B 保守地去除语气词、修正口误和补充标点。录音和文字默认不离开本机。
 
+![LocalType 桌面工作台](assets/desktop-preview.png)
+
 ## 一键安装
 
 ```bash
@@ -21,6 +23,14 @@ omarchy plugin add https://github.com/NuckyInSg/omarchy-localtype.git --enable
 
 插件不会代替你按回车，也不会自动发送消息或执行终端命令。在终端应用中，它通过一次剪贴板粘贴输入整段文字，避免 Codex 等 TUI 把长文本拆成多次提交。
 
+桌面应用可从 Omarchy 应用启动器、状态栏面板中的 **Open app**，或下面的命令打开：
+
+```bash
+localtypectl open
+```
+
+工作台包含听写状态、历史、个人词典、应用场景、本地模型和设置六个页面，并自动跟随当前 Omarchy 主题。
+
 ## 系统要求
 
 - Omarchy 与 NVIDIA GPU；建议至少 6 GiB 显存
@@ -37,6 +47,7 @@ localtypectl status
 localtypectl doctor
 localtypectl restart
 localtypectl edit-dictionary
+localtypectl open history
 ```
 
 更新插件：
@@ -64,6 +75,9 @@ omarchy plugin remove app.localtype.voice-input
 - 插件代码：`~/.config/omarchy/plugins/app.localtype.voice-input/`
 - 模型与 Python 环境：`~/.local/share/localtype/`
 - 个人词典：`~/.config/localtype/dictionary.json`
+- 应用场景：`~/.config/localtype/scenes.json`
+- 桌面设置：`~/.config/localtype/settings.json`
+- 听写历史：`~/.local/state/localtype/history.json`
 - 状态：`~/.local/state/localtype/status.json`
 - systemd 服务：`~/.config/systemd/user/localtype.service`
 
