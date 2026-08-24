@@ -690,7 +690,7 @@ Item {
           Button {
             width: (parent.width - parent.spacing) / 2
             height: parent.height
-            text: root.l("Smart dictation  ·  Clean up wording, grammar, and punctuation", "智能听写  ·  自动优化文本、修正语法与标点")
+            text: root.l("Smart  ·  Clean up wording and punctuation", "智能听写  ·  自动优化文本、修正语法与标点")
             iconText: "󰧑"
             selected: root.selectedMode === "smart"
             bordered: true
@@ -703,7 +703,7 @@ Item {
           Button {
             width: (parent.width - parent.spacing) / 2
             height: parent.height
-            text: root.l("Verbatim dictation  ·  Preserve the recognized wording", "原文听写  ·  忠实记录原话")
+            text: root.l("Verbatim  ·  Preserve recognized wording", "原文听写  ·  忠实记录原话")
             iconText: "󰑋"
             selected: root.selectedMode === "raw"
             bordered: true
