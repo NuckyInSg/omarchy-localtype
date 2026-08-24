@@ -297,7 +297,7 @@ def managed_window_rules() -> str:
     return (
         f"{WINDOWS_START}\n"
         'o.window({ class = "^org\\\\.quickshell$", title = "^LocalType$" }, '
-        '{ float = true, center = true, size = { 1400, 980 } })\n'
+        '{ float = true, center = true, size = { 1400, 980 }, tag = "-default-opacity", opacity = "1 1" })\n'
         f"{WINDOWS_END}\n"
     )
 
@@ -557,7 +557,11 @@ def main() -> int:
         if not command_exists("omarchy-shell"):
             print("omarchy-shell is not available", file=sys.stderr)
             return 1
-        result = run(["omarchy-shell", "shell", "summon", "app.localtype.voice-input", "{}"])
+        page = sys.argv[2] if len(sys.argv) > 2 else "workspace"
+        if page not in {"workspace", "history", "dictionary", "scenes", "models", "settings"}:
+            raise SystemExit("page must be workspace, history, dictionary, scenes, models, or settings")
+        payload = json.dumps({"page": page}, separators=(",", ":"))
+        result = run(["omarchy-shell", "shell", "summon", "app.localtype.voice-input", payload])
         if result.returncode != 0:
             print(result.stderr.strip() or "failed to open LocalType", file=sys.stderr)
         return result.returncode

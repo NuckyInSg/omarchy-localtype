@@ -65,6 +65,14 @@ Item {
   function open(payloadJson) {
     closingFromHost = false
     appWindow.visible = true
+    if (payloadJson) {
+      try {
+        var payload = JSON.parse(String(payloadJson))
+        var requestedPage = String(payload.page || "")
+        if (["workspace", "history", "dictionary", "scenes", "models", "settings"].indexOf(requestedPage) !== -1)
+          currentPage = requestedPage
+      } catch (error) { /* Ignore malformed optional launch payloads. */ }
+    }
     runtimeState.refresh()
     loadCurrentPage()
     Qt.callLater(function() { appFocus.forceActiveFocus() })
