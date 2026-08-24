@@ -202,7 +202,7 @@ Item {
     id: runtimeState
     ctlPath: root.ctlPath
     refreshInterval: 2000
-    onRefreshed: if ((root.currentPage === "workspace" || root.currentPage === "history") && !root.dataProcess.running)
+    onRefreshed: if (root.currentPage === "workspace" || root.currentPage === "history")
       root.loadDataset("history", ["history-list"])
   }
 
