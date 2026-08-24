@@ -91,7 +91,10 @@ Item {
     loadCurrentPage()
   }
   function loadCurrentPage() {
-    if (currentPage === "history") loadDataset("history", ["history-list"])
+    if (currentPage === "workspace") {
+      runtimeState.refresh()
+      loadDataset("history", ["history-list"])
+    } else if (currentPage === "history") loadDataset("history", ["history-list"])
     else if (currentPage === "dictionary") loadDataset("dictionary", ["dictionary-list"])
     else if (currentPage === "scenes") loadDataset("scenes", ["scenes-list"])
     else if (currentPage === "settings") loadDataset("settings", ["settings-show"])
@@ -162,6 +165,15 @@ Item {
     var seconds = Math.max(0, Math.round(Number(milliseconds || 0) / 1000))
     return "00:" + String(seconds).padStart(2, "0")
   }
+  function recentEntry() {
+    return allHistory.length > 0 ? allHistory[0] : ({})
+  }
+  function recentText() {
+    return String(runtimeState.record.last_text || recentEntry().final_text || "完成一次听写后，整理结果会显示在这里。")
+  }
+  function recentUpdatedAt() {
+    return String(runtimeState.record.updated_at || recentEntry().created_at || "")
+  }
   function phaseTitle() {
     if (runtimeState.recording) return "正在聆听"
     if (runtimeState.processing) return "正在本地识别"
@@ -190,7 +202,7 @@ Item {
     id: runtimeState
     ctlPath: root.ctlPath
     refreshInterval: 2000
-    onRefreshed: if (root.currentPage === "history" && !root.dataProcess.running)
+    onRefreshed: if ((root.currentPage === "workspace" || root.currentPage === "history") && !root.dataProcess.running)
       root.loadDataset("history", ["history-list"])
   }
 
@@ -682,8 +694,8 @@ Item {
               anchors.margins: 18
               spacing: 14
               BodyText {
-                width: historyView.availableWidth
-                text: String(runtimeState.record.last_text || "完成一次听写后，整理结果会显示在这里。")
+                width: parent.width
+                text: root.recentText()
                 font.pixelSize: Style.font.subtitle
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
@@ -691,11 +703,11 @@ Item {
               }
               Row {
                 width: parent.width
-                MutedText { text: root.formatTime(runtimeState.record.updated_at) }
+                MutedText { text: root.formatTime(root.recentUpdatedAt()) }
                 Item { width: parent.width - 130; height: 1 }
                 Button {
                   width: 90; text: "复制"; iconText: "󰆏"; bordered: true; foreground: root.foreground
-                  onClicked: root.runAction(["copy-recent"], "")
+                  onClicked: root.runAction(["copy-text", root.recentText()], "")
                 }
               }
             }
