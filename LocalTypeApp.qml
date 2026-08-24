@@ -249,7 +249,7 @@ Item {
   component SectionLabel: Text {
     color: root.muted
     font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
+    font.pixelSize: Math.max(11, Style.font.caption)
     font.bold: true
     font.letterSpacing: 1.1
   }
@@ -264,20 +264,20 @@ Item {
   component BodyText: Text {
     color: root.foreground
     font.family: root.fontFamily
-    font.pixelSize: Style.font.body
+    font.pixelSize: Math.max(14, Style.font.body)
   }
 
   component MutedText: Text {
     color: root.muted
     font.family: root.fontFamily
-    font.pixelSize: Style.font.bodySmall
+    font.pixelSize: Math.max(12, Style.font.bodySmall)
   }
 
   component PageHeader: Item {
     property alias actionText: headerAction.text
     property alias actionIcon: headerAction.iconText
     signal actionClicked()
-    height: 72
+    height: 100
     width: parent ? parent.width : 0
 
     Column {
@@ -448,7 +448,7 @@ Item {
                       text: "LOCALTYPE"
                       color: root.accent
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.heading
+                      font.pixelSize: Math.max(18, Style.font.heading)
                       font.bold: true
                       font.letterSpacing: 1.5
                     }
@@ -480,7 +480,7 @@ Item {
                       foreground: root.currentPage === modelData.id ? root.accent : root.foreground
                       accent: root.accent
                       fontFamily: root.fontFamily
-                      fontSize: Style.font.subtitle
+                      fontSize: Math.max(16, Style.font.subtitle)
                       horizontalPadding: 16
                       onClicked: root.navigate(modelData.id)
 
@@ -592,7 +592,7 @@ Item {
 
         Surface {
           width: parent.width
-          height: Math.max(300, parent.height * 0.50)
+          height: Math.max(340, parent.height * 0.58)
           borderSpec: Border.flat(root.accent, 1)
 
           Column {
@@ -768,7 +768,7 @@ Item {
                 required property var modelData
                 required property int index
                 width: historyView.availableWidth
-                height: Math.max(138, historyText.implicitHeight + 94)
+                height: Math.max(188, historyText.implicitHeight + 142)
                 borderSpec: Border.flat(index === 0 ? root.accent : root.alpha(root.foreground, 0.18), 1)
 
                 Column {
@@ -795,6 +795,7 @@ Item {
                     }
                   }
                   Rectangle { width: parent.width; height: 1; color: root.alpha(root.foreground, 0.12) }
+                  SectionLabel { text: parent.parent.modelData.mode === "smart" ? "智能润色" : "听写原文"; color: parent.parent.modelData.mode === "smart" ? root.accent : root.muted }
                   BodyText {
                     id: historyText
                     width: parent.width
