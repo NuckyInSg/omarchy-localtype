@@ -67,8 +67,16 @@ if systemctl --user is-active --quiet "$record_unit"; then
       # transcript as individual virtual keystrokes can be split into bursts.
       printf '%s' "$text" | wl-copy
       wtype -M ctrl -M shift -k v -m shift -m ctrl
+      injection_method="clipboard_terminal"
+    elif [[ "$focused_class" =~ ([Cc]hromium|[Cc]hrome) ]]; then
+      # Chromium can drop the first virtual character from a wtype sequence.
+      # A single native paste event avoids per-character focus/IME races.
+      printf '%s' "$text" | wl-copy
+      wtype -M ctrl -k v -m ctrl
+      injection_method="clipboard_browser"
     else
       wtype -- "$text"
+      injection_method="wtype"
     fi
     notify-send -a "LocalType" "$text"
     history_args=(
@@ -80,6 +88,7 @@ if systemctl --user is-active --quiet "$record_unit"; then
       --final-text "$text"
       --duration-ms "$duration_ms"
       --processing-ms "$processing_ms"
+      --injection-method "$injection_method"
     )
     [[ "$polished" == "true" ]] && history_args+=(--polished)
     "$store_cmd" "${history_args[@]}"

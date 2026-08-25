@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from prompt_defaults import DEFAULT_POLISH_PROMPT
+
 
 def config_home() -> Path:
     explicit = os.environ.get("LOCALTYPE_CONFIG_HOME")
@@ -105,6 +107,7 @@ DEFAULT_SETTINGS = {
     "launch_at_startup": True,
     "prewarm_models": True,
     "terminal_paste": True,
+    "polish_prompt": DEFAULT_POLISH_PROMPT,
 }
 
 
@@ -133,6 +136,11 @@ def write_json(path: Path, value) -> None:
             pass
 
 
+def settings_data() -> dict:
+    saved = read_json(SETTINGS_PATH, {})
+    return {**DEFAULT_SETTINGS, **saved}
+
+
 def dictionary_entries() -> list[dict]:
     mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
     return [
@@ -156,7 +164,7 @@ def history_entries(query: str = "") -> list[dict]:
 
 
 def add_history(args: argparse.Namespace) -> None:
-    settings = read_json(SETTINGS_PATH, DEFAULT_SETTINGS)
+    settings = settings_data()
     if not settings.get("keep_history", True):
         return
     entries = read_json(HISTORY_PATH, [])
@@ -179,6 +187,7 @@ def add_history(args: argparse.Namespace) -> None:
             "output_status": "typed",
             "duration_ms": args.duration_ms,
             "processing_ms": args.processing_ms,
+            "injection_method": args.injection_method,
         },
     )
     write_json(HISTORY_PATH, entries[:200])
@@ -205,6 +214,7 @@ def main() -> None:
     history_add.add_argument("--polished", action="store_true")
     history_add.add_argument("--duration-ms", type=int, default=0)
     history_add.add_argument("--processing-ms", type=int, default=0)
+    history_add.add_argument("--injection-method", default="unknown")
     history_add.add_argument("--created-at", default="")
     history_delete = subparsers.add_parser("history-delete")
     history_delete.add_argument("id")
@@ -235,6 +245,8 @@ def main() -> None:
     setting_set = subparsers.add_parser("setting-set")
     setting_set.add_argument("key")
     setting_set.add_argument("value")
+    setting_reset = subparsers.add_parser("setting-reset")
+    setting_reset.add_argument("key")
     shortcuts_set = subparsers.add_parser("shortcuts-set")
     shortcuts_set.add_argument("smart")
     shortcuts_set.add_argument("raw")
@@ -282,9 +294,9 @@ def main() -> None:
             scene["classes"] = args.classes
             write_json(SCENES_PATH, scenes)
     elif args.command == "settings-show":
-        print(json.dumps(read_json(SETTINGS_PATH, DEFAULT_SETTINGS), ensure_ascii=False))
+        print(json.dumps(settings_data(), ensure_ascii=False))
     elif args.command == "setting-set":
-        settings = read_json(SETTINGS_PATH, DEFAULT_SETTINGS)
+        settings = settings_data()
         if args.key in {"keep_history", "launch_at_startup", "prewarm_models", "terminal_paste"}:
             settings[args.key] = args.value.lower() == "true"
         elif args.key == "history_days":
@@ -293,9 +305,21 @@ def main() -> None:
             settings[args.key] = args.value
         elif args.key == "language" and args.value in {"en", "zh"}:
             settings[args.key] = args.value
+        elif args.key == "polish_prompt":
+            if not args.value.strip():
+                raise SystemExit("polish_prompt must not be empty")
+            if len(args.value) > 12000:
+                raise SystemExit("polish_prompt must be 12000 characters or fewer")
+            settings[args.key] = args.value
+        write_json(SETTINGS_PATH, settings)
+    elif args.command == "setting-reset":
+        if args.key != "polish_prompt":
+            raise SystemExit("only polish_prompt can be reset")
+        settings = settings_data()
+        settings["polish_prompt"] = DEFAULT_POLISH_PROMPT
         write_json(SETTINGS_PATH, settings)
     elif args.command == "shortcuts-set":
-        settings = read_json(SETTINGS_PATH, DEFAULT_SETTINGS)
+        settings = settings_data()
         settings["smart_shortcut"] = args.smart
         settings["raw_shortcut"] = args.raw
         write_json(SETTINGS_PATH, settings)

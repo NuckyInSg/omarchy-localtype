@@ -22,7 +22,7 @@ The plugin installs its runtime, models, user-level systemd service, desktop lau
 | `F9` | Start or stop smart dictation |
 | `Shift+F9` | Start or stop verbatim dictation |
 
-LocalType types text but never presses Enter, sends a message, or executes a terminal command. Terminal apps receive the full transcript in one bracketed-paste event so TUIs such as Codex do not split it into multiple submissions.
+LocalType types text but never presses Enter, sends a message, or executes a terminal command. Terminal apps receive one bracketed-paste event so TUIs such as Codex do not split it; Chromium-based browsers use one clipboard paste to avoid dropping the first virtual character.
 
 Open the desktop app from the Omarchy launcher, the bar panel, or the CLI:
 
@@ -42,6 +42,10 @@ Edit both shortcut fields in **Settings → Shortcuts**, then choose **Apply sho
 localtypectl shortcuts-set "F9" "SHIFT + F9"
 ```
 
+### Editable polish prompt
+
+Open **Settings → Polish Prompt** to inspect and edit the complete Chat Prompt used by Qwen3-0.6B. The default JSON contains the system instruction and input/output examples; `{context}` expands to the active app class. Plain-text system prompts are also supported. Saved changes apply to the next dictation without restarting the service.
+
 ## Requirements
 
 - Omarchy and an NVIDIA GPU; at least 6 GiB VRAM is recommended
@@ -59,6 +63,7 @@ localtypectl doctor
 localtypectl restart
 localtypectl edit-dictionary
 localtypectl open history
+localtypectl logs 20
 ```
 
 Update:
@@ -88,6 +93,7 @@ omarchy plugin remove app.localtype.voice-input
 - Dictionary: `~/.config/localtype/dictionary.json`
 - Scenes and settings: `~/.config/localtype/`
 - Dictation history and status: `~/.local/state/localtype/`
+- Rotating pipeline diagnostics: `~/.local/state/localtype/pipeline.jsonl` (up to four 5 MiB files; audio is not stored)
 - User service: `~/.config/systemd/user/localtype.service`
 
 If an older `~/.local/share/qwen3-asr/` installation is present, LocalType reuses its Python environment and model cache.

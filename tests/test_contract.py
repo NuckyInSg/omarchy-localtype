@@ -85,6 +85,37 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn("wl-copy", toggle)
         self.assertIn("-k v", toggle)
 
+    def test_polisher_is_prompt_driven_and_prompt_is_editable_in_app(self) -> None:
+        server = (RUNTIME / "server.py").read_text(encoding="utf-8")
+        app = (PLUGIN / "LocalTypeApp.qml").read_text(encoding="utf-8")
+        self.assertNotIn("POLISH_TRIGGERS", server)
+        self.assertNotIn("REQUEST_MARKERS", server)
+        self.assertNotIn("REPEATED_DISCOURSE_PATTERN", server)
+        self.assertIn("DEFAULT_POLISH_PROMPT", server)
+        self.assertIn('settings.get("polish_prompt")', server)
+        self.assertIn('"setting-set", "polish_prompt"', app)
+        self.assertIn('"setting-reset", "polish_prompt"', app)
+        self.assertIn("{context}", app)
+
+    def test_pipeline_logs_are_readable_through_controller(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_home = Path(directory) / "localtype"
+            state_home.mkdir()
+            (state_home / "pipeline.jsonl").write_text(
+                '{"event":"transcribe","decision":"accepted_polisher_candidate"}\n',
+                encoding="utf-8",
+            )
+            environment = os.environ.copy()
+            environment["XDG_STATE_HOME"] = directory
+            output = subprocess.check_output(
+                [str(PLUGIN / "bin/localtypectl"), "logs", "1"],
+                text=True,
+                env=environment,
+            )
+        entries = json.loads(output)
+        self.assertEqual(entries[0]["event"], "transcribe")
+        self.assertEqual(entries[0]["decision"], "accepted_polisher_candidate")
+
     def test_toggle_script_record_and_terminal_paste_flow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -106,7 +137,10 @@ class PluginContractTests(unittest.TestCase):
                 'printf \'{"raw_text":"测试原文","text":"测试结果"}\'; '
                 'else printf \'{"status":"ready"}\'; fi\n',
             )
-            self.write_executable(fake_bin / "hyprctl", 'printf \'{"class":"foot"}\'\n')
+            self.write_executable(
+                fake_bin / "hyprctl",
+                'printf \'{"class":"%s"}\' "${FAKE_WINDOW_CLASS:-foot}"\n',
+            )
             self.write_executable(fake_bin / "wl-copy", f'cat >"{root / "clipboard.txt"}"\n')
             self.write_executable(fake_bin / "wtype", f'printf "%s\\n" "$*" >>"{log}"\n')
 
@@ -133,6 +167,20 @@ class PluginContractTests(unittest.TestCase):
             calls = log.read_text(encoding="utf-8")
             self.assertIn("-M ctrl -M shift -k v -m shift -m ctrl", calls)
             self.assertNotIn("enter", calls.lower())
+
+            environment["FAKE_WINDOW_CLASS"] = "chromium"
+            environment["FAKE_RECORDING"] = "0"
+            subprocess.run([str(RUNTIME / "toggle.sh"), "smart"], check=True, env=environment)
+            audio.write_bytes(b"RIFF-test")
+            environment["FAKE_RECORDING"] = "1"
+            subprocess.run([str(RUNTIME / "toggle.sh"), "smart"], check=True, env=environment)
+            calls = log.read_text(encoding="utf-8")
+            self.assertIn("-M ctrl -k v -m ctrl", calls)
+            browser_history = json.loads(
+                (state_home / "localtype/history.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(browser_history[0]["application_class"], "chromium")
+            self.assertEqual(browser_history[0]["injection_method"], "clipboard_browser")
 
     def test_dictionary_is_valid_string_mapping(self) -> None:
         dictionary = json.loads((PLUGIN / "config/dictionary.json").read_text(encoding="utf-8"))
@@ -173,6 +221,7 @@ class PluginContractTests(unittest.TestCase):
             )
             self.assertEqual(history[0]["application_title"], "Codex")
             self.assertEqual(history[0]["final_text"], "测试结果")
+            self.assertEqual(history[0]["injection_method"], "unknown")
 
             subprocess.run(
                 [str(store), "dictionary-set", "欧马奇", "Omarchy"],
@@ -196,6 +245,26 @@ class PluginContractTests(unittest.TestCase):
             self.assertEqual(settings["language"], "en")
             self.assertEqual(settings["smart_shortcut"], "F9")
             self.assertEqual(settings["raw_shortcut"], "SHIFT + F9")
+            self.assertIn("给我介绍一下这个项目", settings["polish_prompt"])
+
+            subprocess.run(
+                [str(store), "setting-set", "polish_prompt", "只修正标点：{context}"],
+                check=True,
+                env=environment,
+            )
+            customized = json.loads(
+                subprocess.check_output([str(store), "settings-show"], text=True, env=environment)
+            )
+            self.assertEqual(customized["polish_prompt"], "只修正标点：{context}")
+            subprocess.run(
+                [str(store), "setting-reset", "polish_prompt"],
+                check=True,
+                env=environment,
+            )
+            restored = json.loads(
+                subprocess.check_output([str(store), "settings-show"], text=True, env=environment)
+            )
+            self.assertIn("给我介绍一下这个项目", restored["polish_prompt"])
 
     def test_shortcuts_are_persisted_and_rendered_into_managed_bindings(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

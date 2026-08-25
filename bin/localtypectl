@@ -43,6 +43,7 @@ DICTIONARY_DEFAULT = PLUGIN_ROOT / "config/dictionary.json"
 DICTIONARY = CONFIG_HOME / "dictionary.json"
 STATE_FILE = STATE_HOME / "status.json"
 HISTORY_FILE = STATE_HOME / "history.json"
+PIPELINE_LOG = STATE_HOME / "pipeline.jsonl"
 SETTINGS_FILE = CONFIG_HOME / "settings.json"
 SERVICE_FILE = SYSTEMD_HOME / "localtype.service"
 RECORDING = RUNTIME_HOME / "recording.wav"
@@ -184,6 +185,8 @@ Type=simple
 Environment={systemd_quote(f'HF_HOME={hf_home}')}
 Environment={systemd_quote('CUDA_VISIBLE_DEVICES=0')}
 Environment={systemd_quote(f'LOCALTYPE_DICTIONARY={DICTIONARY}')}
+Environment={systemd_quote(f'LOCALTYPE_SETTINGS={SETTINGS_FILE}')}
+Environment={systemd_quote(f'LOCALTYPE_STATE_HOME={STATE_HOME}')}
 ExecStart={systemd_quote(venv / 'bin/uvicorn')} server:app --host 127.0.0.1 --port 8765
 WorkingDirectory={PLUGIN_ROOT / 'runtime'}
 Restart=on-failure
@@ -383,7 +386,11 @@ def requirements_digest() -> str:
 
 def runtime_digest() -> str:
     digest = hashlib.sha256()
-    for path in (PLUGIN_ROOT / "runtime/server.py", REQUIREMENTS):
+    for path in (
+        PLUGIN_ROOT / "runtime/server.py",
+        PLUGIN_ROOT / "runtime/prompt_defaults.py",
+        REQUIREMENTS,
+    ):
         digest.update(path.read_bytes())
     return digest.hexdigest()
 
@@ -575,9 +582,24 @@ def print_status() -> None:
         "processing_ms": state.get("processing_ms", 0),
         "application_class": state.get("application_class", ""),
         "application_title": state.get("application_title", ""),
+        "pipeline_log": str(PIPELINE_LOG),
         "gpu": gpu_status(),
     }
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
+
+
+def print_pipeline_logs(limit: int) -> None:
+    try:
+        lines = PIPELINE_LOG.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    entries = []
+    for line in lines[-limit:]:
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            entries.append({"event": "invalid_log_line", "raw": line})
+    print(json.dumps(entries, ensure_ascii=False, indent=2))
 
 
 def notify(title: str, body: str) -> None:
@@ -641,6 +663,13 @@ def main() -> int:
         return ensure_runtime()
     if command == "doctor":
         return doctor()
+    if command == "logs":
+        try:
+            limit = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+        except ValueError:
+            raise SystemExit("usage: localtypectl logs [COUNT]")
+        print_pipeline_logs(max(1, min(limit, 200)))
+        return 0
     if command == "toggle":
         mode = sys.argv[2] if len(sys.argv) > 2 else "smart"
         if mode not in ("smart", "raw"):
@@ -722,6 +751,7 @@ def main() -> int:
         "scene-save",
         "settings-show",
         "setting-set",
+        "setting-reset",
     }
     if command in store_commands:
         return subprocess.call([str(STORE_HELPER), *sys.argv[1:]])

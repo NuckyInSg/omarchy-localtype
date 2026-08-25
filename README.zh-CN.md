@@ -21,7 +21,7 @@ omarchy plugin add https://github.com/NuckyInSg/omarchy-localtype.git --enable
 | `F9` | 开始或停止智能听写 |
 | `Shift+F9` | 开始或停止原文听写 |
 
-插件只输入文字，不会代替你按回车、发送消息或执行终端命令。终端应用会通过一次整段粘贴接收文字，避免 Codex 等 TUI 把长文本拆成多次提交。
+插件只输入文字，不会代替你按回车、发送消息或执行终端命令。终端应用通过一次整段粘贴避免 Codex 等 TUI 拆分文本；Chromium 系浏览器则通过一次剪贴板粘贴避免丢失首个虚拟按键字符。
 
 从 Omarchy 应用启动器、状态栏面板或命令行打开桌面应用：
 
@@ -41,6 +41,10 @@ localtypectl open
 localtypectl shortcuts-set "F9" "SHIFT + F9"
 ```
 
+### 可编辑的润色提示词
+
+在 **设置 → 润色提示词** 中可以查看和编辑 Qwen3-0.6B 实际使用的完整 Chat Prompt。默认 JSON 包含 system 指令和输入/输出示例，`{context}` 会替换为当前应用类名；也支持直接填写纯文本 system prompt。保存后下一次听写立即生效，无需重启服务。
+
 ## 系统要求
 
 - Omarchy 与 NVIDIA GPU；建议至少 6 GiB 显存
@@ -58,6 +62,7 @@ localtypectl doctor
 localtypectl restart
 localtypectl edit-dictionary
 localtypectl open history
+localtypectl logs 20
 ```
 
 更新：
@@ -87,6 +92,7 @@ omarchy plugin remove app.localtype.voice-input
 - 个人词典：`~/.config/localtype/dictionary.json`
 - 场景与设置：`~/.config/localtype/`
 - 听写历史与状态：`~/.local/state/localtype/`
+- 滚动流水线诊断日志：`~/.local/state/localtype/pipeline.jsonl`（最多四个 5 MiB 文件，不保存音频）
 - 用户服务：`~/.config/systemd/user/localtype.service`
 
 若检测到旧版 `~/.local/share/qwen3-asr/`，安装器会复用已有 Python 环境与模型缓存。

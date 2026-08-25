@@ -228,6 +228,10 @@ Item {
     if (String(smart).trim() === "" || String(raw).trim() === "") return
     runAction(["shortcuts-set", String(smart).trim(), String(raw).trim()], "settings")
   }
+  function savePolishPrompt(prompt) {
+    if (String(prompt).trim() === "") return
+    runAction(["setting-set", "polish_prompt", String(prompt)], "settings")
+  }
 
   LocalTypeState {
     id: runtimeState
@@ -1205,6 +1209,58 @@ Item {
                 foreground: root.accent
                 accent: root.accent
                 onClicked: root.saveShortcuts(smartShortcutField.text, rawShortcutField.text)
+              }
+            }
+          }
+          Surface {
+            width: parent.width
+            height: 486
+            Column {
+              anchors.fill: parent
+              anchors.margins: 18
+              spacing: 11
+              SectionLabel { text: root.l("POLISH PROMPT", "润色提示词") }
+              MutedText {
+                width: parent.width
+                text: root.l(
+                  "Complete Chat Prompt JSON sent to Qwen3-0.6B: edit system and input/output examples. Use {context} for the active app class. Plain-text system prompts also work. Changes apply immediately.",
+                  "这是发送给 Qwen3-0.6B 的完整 Chat Prompt JSON：可编辑 system 和输入/输出示例。可用 {context} 引用当前应用类名；也支持纯文本 system prompt，保存后立即生效。"
+                )
+                wrapMode: Text.Wrap
+              }
+              TextArea {
+                id: polishPromptField
+                width: parent.width
+                height: 326
+                text: String(root.settings.polish_prompt || "")
+                color: root.foreground
+                placeholderTextColor: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: TextEdit.Wrap
+                background: Surface {}
+                padding: 12
+              }
+              Row {
+                width: parent.width
+                spacing: 12
+                Button {
+                  width: (parent.width - parent.spacing) / 2
+                  text: root.l("Restore default", "恢复默认")
+                  iconText: "󰑐"
+                  bordered: true
+                  foreground: root.foreground
+                  onClicked: root.runAction(["setting-reset", "polish_prompt"], "settings")
+                }
+                Button {
+                  width: (parent.width - parent.spacing) / 2
+                  text: root.l("Save prompt", "保存提示词")
+                  iconText: "󰆓"
+                  bordered: true
+                  foreground: root.accent
+                  accent: root.accent
+                  onClicked: root.savePolishPrompt(polishPromptField.text)
+                }
               }
             }
           }
