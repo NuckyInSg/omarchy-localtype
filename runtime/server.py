@@ -16,6 +16,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from prompt_defaults import DEFAULT_POLISH_PROMPT
 from qwen_asr import Qwen3ASRModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from vocabulary import asr_context, personal_dictionary
 
 
 app = FastAPI()
@@ -58,10 +59,6 @@ if not pipeline_logger.handlers:
     pipeline_handler.setFormatter(logging.Formatter("%(message)s"))
     pipeline_logger.addHandler(pipeline_handler)
 
-DEFAULT_PERSONAL_DICTIONARY = {
-    "泰普勒式": "Typeless",
-    "泰普勒斯": "Typeless",
-}
 DICTIONARY_PATH = Path(
     os.environ.get(
         "LOCALTYPE_DICTIONARY",
@@ -74,20 +71,6 @@ SETTINGS_PATH = Path(
         Path.home() / ".config/localtype/settings.json",
     )
 )
-
-
-def personal_dictionary() -> dict[str, str]:
-    try:
-        value = json.loads(DICTIONARY_PATH.read_text(encoding="utf-8"))
-        if isinstance(value, dict):
-            return {
-                str(spoken): str(written)
-                for spoken, written in value.items()
-                if str(spoken) and str(written)
-            }
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
-    return DEFAULT_PERSONAL_DICTIONARY
 
 
 def polisher_prompt_template() -> str:
@@ -141,7 +124,7 @@ def write_pipeline_log(payload: dict) -> None:
 def polish_text(raw_text: str, context: str, diagnostics: dict | None = None) -> str:
     details = diagnostics if diagnostics is not None else {}
     dictionary_corrected_text = raw_text
-    for spoken, written in personal_dictionary().items():
+    for spoken, written in personal_dictionary(DICTIONARY_PATH).items():
         dictionary_corrected_text = dictionary_corrected_text.replace(spoken, written)
     details.update(
         {
@@ -247,13 +230,19 @@ async def transcribe(
         with inference_lock, torch.inference_mode():
             stage = "asr"
             asr_started = time.perf_counter()
+            vocabulary_context = asr_context(
+                context,
+                personal_dictionary(DICTIONARY_PATH),
+            )
             result = model.transcribe(
                 audio=(data, sample_rate),
+                context=vocabulary_context,
                 language="Chinese",
             )
             asr_ms = round((time.perf_counter() - asr_started) * 1000)
             raw_text = result[0].text.strip()
             diagnostics = {
+                "asr_context": vocabulary_context,
                 "dictionary_text": raw_text,
                 "polisher_invoked": False,
                 "polisher_candidate": None,

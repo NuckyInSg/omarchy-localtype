@@ -1,48 +1,42 @@
-# LocalType Desktop Design QA
-
-## Result
-
-passed
+# LocalType 0.5.0 Design QA
 
 ## Test setup
 
-- Implementation: native Omarchy Shell QML panel displayed as a centered floating window.
-- Viewport: 1400 × 980 physical pixels.
-- State: Ristretto theme, service ready, Qwen3-ASR-1.7B and Qwen3-0.6B loaded on an RTX 5070.
-- Reference images: generated product mockups for Workspace, History, Dictionary, Scenes, and Models.
-- Reference dimensions: 1484–1487 × 1058–1060; each reference was center-cropped after proportional scaling to 1400 × 980 before comparison.
-- Evidence directory: local `qa/` captures and side-by-side comparison images (intentionally ignored by Git).
+- Product target: selected Typeless-inspired option 2, implemented as the native Omarchy Shell QML panel.
+- Source truth: `/home/xinzhang/.codex/generated_images/01a02ea5-7e4f-7591-8000-e38c75327d9a/exec-38a5d946-c7b1-41d8-925d-48ecd346e2b5.png`.
+- Render viewport: 1400 × 980 physical pixels at density 1; no viewport normalization was required for implementation captures.
+- Tested states: Dictate idle, History with persisted local data, Dictionary with saved terms and correction review, Settings collapsed, and Settings advanced.
+- Native runtime: Quickshell offscreen renderer using the installed Omarchy `Commons` and `Ui` modules. The isolated renderer intentionally had no user D-Bus or speech service access, so captures show the offline state.
 
 ## Required fidelity surfaces
 
-- Ristretto background, foreground, muted, urgent, and accent tokens.
-- 300 px sidebar at the tested viewport, persistent model/GPU status card, and six-page navigation.
-- Workspace recording surface, mode selection, recent transcript, and F9 action.
-- History filters and cards, dictionary editor/table, scene rule editor, model/device status, and settings controls.
-- Omarchy-native borders, typography, controls, spacing, window behavior, and dynamic theme inheritance.
+- Flat Omarchy theme tokens, restrained borders, monospace typography, mint accent, and compact square controls.
+- Three primary destinations only: Dictate, History, and Dictionary.
+- A single horizontal recording surface with Polished/Verbatim mode selection.
+- A compact recent-transcript list with correction and copy actions.
+- Dictionary management and correction review in one place.
+- Settings behind the gear button, with language, shortcuts, and privacy first; prompt and diagnostics collapsed under Advanced settings.
+- No model inventory, GPU telemetry, scene editor, or learning page in the daily navigation.
 
 ## Comparison evidence
 
-- Full Workspace: `qa/workspace-comparison-final-v2.png`
-- Focused Workspace content: `qa/workspace-focus-comparison-final-v2.png`
-- Full History: `qa/history-comparison-final.png`
-- Full Scenes: `qa/scenes-comparison-final.png`
-- Final six-page contact sheet: `qa/final-contact-sheet.png`
-- English six-page contact sheet: `qa/i18n/english-contact-sheet.png`
-- English Settings: `qa/i18n/settings-en-final.png`
-- Simplified Chinese Settings: `qa/i18n/settings-zh.png`
+- Full source reference: `/home/xinzhang/.codex/generated_images/01a02ea5-7e4f-7591-8000-e38c75327d9a/exec-38a5d946-c7b1-41d8-925d-48ecd346e2b5.png`.
+- Full Dictate implementation: `qa/typeless-option-2/workspace.png`.
+- Focused reference/implementation crops: `qa/typeless-option-2/source-focus.png` and `qa/typeless-option-2/implementation-focus.png`.
+- Route captures: `qa/typeless-option-2/history.png`, `dictionary.png`, `settings.png`, and `settings-advanced.png`.
 
-Each comparison places the normalized reference on the left and the running implementation on the right.
+The source and implementation were inspected together at the same target viewport. The implementation intentionally uses four real recent entries instead of the mock's three, omits decorative waveform art, and reports service offline only in the isolated QA renderer.
 
 ## Iterations and findings
 
-1. Corrected the QML component context and a loader name collision so the desktop panel opens reliably.
-2. Added a managed Hyprland rule for an opaque, centered 1400 × 980 floating window.
-3. Increased typography and vertical rhythm to match the visual reference while retaining Omarchy design tokens.
-4. Corrected History delegate width/height and exposed both polished and original text without clipping.
-5. Loaded the latest persisted transcript on Workspace and made its copy action use the visible text.
-6. Removed a two-second QML refresh warning found during runtime log inspection.
-7. Verified all six pages in the English-default locale and the Settings page in Simplified Chinese.
-8. Shortened English mode-card labels after the first locale pass exposed an overflow at 1400 × 980.
+1. Replaced the six-item sidebar with three top-level destinations and a gear-only Settings entry.
+2. Fixed the recording card and recent-row width calculations after the first render exposed right-edge overflow.
+3. Rebuilt History as a compact searchable list after comparison showed the previous card/filter treatment remained too administrative.
+4. Merged correction review into Dictionary and fixed staged loading so dictionary entries and pending corrections are both retained.
+5. Reduced Settings to General and Shortcuts, moved prompt/preload/diagnostics under a collapsed Advanced section, and adjusted spacing so its entry remains visible at 1400 × 980.
+6. Added an explicit mint border to the recording action to match the selected visual direction.
+7. Verified English-default copy, Simplified Chinese selection, editable shortcuts, correction actions, prompt editing, history controls, and compatibility aliases for old launch payloads.
 
-No P0, P1, or P2 visual or interaction issues remain in the tested viewport. Differences from the mockups are limited to real user data volume and Omarchy's theme-native toggle treatment, both intentional.
+No P0, P1, or P2 visual or interaction issues remain at the tested viewport. The remaining P3 difference is the omitted decorative waveform from the concept image; the production UI uses the existing Nerd Font microphone icon so it stays native to Omarchy.
+
+final result: passed

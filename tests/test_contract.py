@@ -97,6 +97,19 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn('"setting-reset", "polish_prompt"', app)
         self.assertIn("{context}", app)
 
+    def test_desktop_app_uses_simplified_typeless_navigation(self) -> None:
+        app = (PLUGIN / "LocalTypeApp.qml").read_text(encoding="utf-8")
+        self.assertIn('{ id: "workspace", label: root.l("Dictate", "听写")', app)
+        self.assertIn('{ id: "history", label: root.l("History", "历史")', app)
+        self.assertIn('{ id: "dictionary", label: root.l("Dictionary", "词典")', app)
+        self.assertIn('onClicked: root.navigate(root.currentPage === "settings" ? "workspace" : "settings")', app)
+        self.assertNotIn('if (currentPage === "learning") return learningPage', app)
+        self.assertNotIn('if (currentPage === "scenes") return scenesPage', app)
+        self.assertNotIn('if (currentPage === "models") return modelsPage', app)
+        self.assertIn('else if (requestedPage === "learning") currentPage = "dictionary"', app)
+        self.assertIn('Review corrections', app)
+        self.assertIn('property bool showAdvanced: false', app)
+
     def test_pipeline_logs_are_readable_through_controller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             state_home = Path(directory) / "localtype"
@@ -231,7 +244,12 @@ class PluginContractTests(unittest.TestCase):
             dictionary = json.loads(
                 subprocess.check_output([str(store), "dictionary-list"], text=True, env=environment)
             )
-            self.assertIn({"spoken": "欧马奇", "written": "Omarchy"}, dictionary)
+            self.assertTrue(
+                any(
+                    entry["spoken"] == "欧马奇" and entry["written"] == "Omarchy"
+                    for entry in dictionary
+                )
+            )
 
             scenes = json.loads(
                 subprocess.check_output([str(store), "scenes-list"], text=True, env=environment)
@@ -245,6 +263,7 @@ class PluginContractTests(unittest.TestCase):
             self.assertEqual(settings["language"], "en")
             self.assertEqual(settings["smart_shortcut"], "F9")
             self.assertEqual(settings["raw_shortcut"], "SHIFT + F9")
+            self.assertEqual(settings["learn_shortcut"], "CTRL + SHIFT + F9")
             self.assertIn("给我介绍一下这个项目", settings["polish_prompt"])
 
             subprocess.run(
@@ -282,7 +301,13 @@ class PluginContractTests(unittest.TestCase):
             environment["LOCALTYPE_CONFIG_HOME"] = str(root / "config")
             environment["LOCALTYPE_HYPR_BINDINGS"] = str(bindings)
             result = subprocess.run(
-                [str(PLUGIN / "bin/localtypectl"), "shortcuts-set", "ctrl + space", "shift + f8"],
+                [
+                    str(PLUGIN / "bin/localtypectl"),
+                    "shortcuts-set",
+                    "ctrl + space",
+                    "shift + f8",
+                    "ctrl + shift + f7",
+                ],
                 text=True,
                 capture_output=True,
                 env=environment,
@@ -291,9 +316,169 @@ class PluginContractTests(unittest.TestCase):
             managed = bindings.read_text(encoding="utf-8")
             self.assertIn('o.bind("CTRL + SPACE"', managed)
             self.assertIn('o.bind("SHIFT + F8"', managed)
+            self.assertIn('o.bind("CTRL + SHIFT + F7"', managed)
+            self.assertIn("learn-correction", managed)
             settings = json.loads((root / "config/settings.json").read_text(encoding="utf-8"))
             self.assertEqual(settings["smart_shortcut"], "CTRL + SPACE")
             self.assertEqual(settings["raw_shortcut"], "SHIFT + F8")
+            self.assertEqual(settings["learn_shortcut"], "CTRL + SHIFT + F7")
+
+    def test_correction_learning_requires_review_then_updates_vocabulary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = os.environ.copy()
+            environment["LOCALTYPE_CONFIG_HOME"] = str(root / "config")
+            environment["LOCALTYPE_STATE_HOME"] = str(root / "state")
+            store = RUNTIME / "store.py"
+            subprocess.run(
+                [
+                    str(store),
+                    "history-add",
+                    "--mode",
+                    "smart",
+                    "--application-class",
+                    "chromium",
+                    "--application-title",
+                    "Chromium",
+                    "--raw-text",
+                    "我正在使用欧码器写代码",
+                    "--final-text",
+                    "我正在使用欧码器写代码",
+                ],
+                check=True,
+                env=environment,
+            )
+            proposed = json.loads(
+                subprocess.check_output(
+                    [
+                        str(store),
+                        "correction-propose",
+                        "--corrected",
+                        "我正在使用 Omarchy 写代码",
+                        "--application-class",
+                        "chromium",
+                    ],
+                    text=True,
+                    env=environment,
+                )
+            )
+            self.assertEqual(proposed[0]["spoken"], "欧码器")
+            self.assertEqual(proposed[0]["written"], "Omarchy")
+            self.assertEqual(proposed[0]["status"], "pending")
+            dictionary_before = json.loads(
+                subprocess.check_output([str(store), "dictionary-list"], text=True, env=environment)
+            )
+            self.assertFalse(any(item["spoken"] == "欧码器" for item in dictionary_before))
+
+            subprocess.run(
+                [str(store), "correction-accept", proposed[0]["id"]],
+                check=True,
+                env=environment,
+            )
+            dictionary_after = json.loads(
+                subprocess.check_output([str(store), "dictionary-list"], text=True, env=environment)
+            )
+            learned = next(item for item in dictionary_after if item["spoken"] == "欧码器")
+            self.assertEqual(learned["written"], "Omarchy")
+            self.assertTrue(learned["learned"])
+
+            sys_path = os.environ.get("PYTHONPATH", "")
+            vocabulary_env = environment.copy()
+            vocabulary_env["PYTHONPATH"] = str(RUNTIME) + (os.pathsep + sys_path if sys_path else "")
+            vocabulary_env["LOCALTYPE_DICTIONARY"] = str(root / "config/dictionary.json")
+            context = subprocess.check_output(
+                [
+                    "python3",
+                    "-c",
+                    "from vocabulary import asr_context; print(asr_context('chromium'))",
+                ],
+                text=True,
+                env=vocabulary_env,
+            )
+            self.assertIn("Omarchy", context)
+
+    def test_large_rewrites_and_punctuation_are_not_learned(self) -> None:
+        script = (
+            "from store import correction_candidates; "
+            "import json; "
+            "print(json.dumps(["
+            "correction_candidates('你好。', '你好！'), "
+            "correction_candidates('给我介绍一下项目', '请详细说明系统架构和部署方法')"
+            "]))"
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(RUNTIME)
+        result = json.loads(
+            subprocess.check_output(["python3", "-c", script], text=True, env=environment)
+        )
+        self.assertEqual(result, [[], []])
+
+    def test_learning_shortcut_copies_selection_in_browser_terminal_and_desktop(self) -> None:
+        for application_class, expected_copy in (
+            ("chromium", "-M ctrl -k c -m ctrl"),
+            ("foot", "-M ctrl -M shift -k c -m shift -m ctrl"),
+            ("org.gnome.TextEditor", "-M ctrl -k c -m ctrl"),
+        ):
+            with self.subTest(application_class=application_class), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fake_bin = root / "bin"
+                fake_bin.mkdir()
+                calls = root / "calls.log"
+                paste_count = root / "paste-count"
+                self.write_executable(
+                    fake_bin / "hyprctl",
+                    f'printf \'{{"class":"{application_class}","title":"Test app"}}\'\n',
+                )
+                self.write_executable(
+                    fake_bin / "wtype",
+                    f'printf "%s\\n" "$*" >>"{calls}"\n',
+                )
+                self.write_executable(
+                    fake_bin / "wl-paste",
+                    f'count=$(cat "{paste_count}" 2>/dev/null || printf 0); '
+                    f'count=$((count + 1)); printf "%s" "$count" >"{paste_count}"; '
+                    'if [[ "$count" == 1 ]]; then printf "old clipboard"; '
+                    'else printf "我正在使用 Omarchy 写代码"; fi\n',
+                )
+                self.write_executable(fake_bin / "wl-copy", f'cat >>"{calls}" || true\n')
+                self.write_executable(fake_bin / "notify-send", ":\n")
+                self.write_executable(fake_bin / "omarchy-shell", ":\n")
+                environment = os.environ.copy()
+                environment["PATH"] = f"{fake_bin}:/usr/bin"
+                environment["LOCALTYPE_CONFIG_HOME"] = str(root / "config")
+                environment["LOCALTYPE_STATE_HOME"] = str(root / "state")
+                subprocess.run(
+                    [
+                        str(RUNTIME / "store.py"),
+                        "history-add",
+                        "--mode",
+                        "smart",
+                        "--application-class",
+                        application_class,
+                        "--raw-text",
+                        "我正在使用欧码器写代码",
+                        "--final-text",
+                        "我正在使用欧码器写代码",
+                    ],
+                    check=True,
+                    env=environment,
+                )
+                result = subprocess.run(
+                    [str(PLUGIN / "bin/localtypectl"), "learn-correction"],
+                    text=True,
+                    capture_output=True,
+                    env=environment,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(expected_copy, calls.read_text(encoding="utf-8"))
+                corrections = json.loads(
+                    subprocess.check_output(
+                        [str(RUNTIME / "store.py"), "corrections-list"],
+                        text=True,
+                        env=environment,
+                    )
+                )
+                self.assertEqual(corrections[0]["written"], "Omarchy")
 
     def test_installer_has_idempotent_managed_integration(self) -> None:
         controller = (PLUGIN / "bin/localtypectl").read_text(encoding="utf-8")
@@ -323,6 +508,7 @@ class PluginContractTests(unittest.TestCase):
             PLUGIN / "runtime/server.py",
             PLUGIN / "runtime/state.py",
             PLUGIN / "runtime/store.py",
+            PLUGIN / "runtime/vocabulary.py",
             PLUGIN / "runtime/toggle.sh",
         ]
         for path in checked:

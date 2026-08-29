@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import tempfile
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +34,7 @@ DICTIONARY_PATH = config_home() / "dictionary.json"
 SCENES_PATH = config_home() / "scenes.json"
 SETTINGS_PATH = config_home() / "settings.json"
 HISTORY_PATH = state_home() / "history.json"
+CORRECTIONS_PATH = config_home() / "learned_corrections.json"
 
 DEFAULT_DICTIONARY = {
     "泰普勒式": "Typeless",
@@ -102,6 +105,7 @@ DEFAULT_SETTINGS = {
     "default_mode": "smart",
     "smart_shortcut": "F9",
     "raw_shortcut": "SHIFT + F9",
+    "learn_shortcut": "CTRL + SHIFT + F9",
     "keep_history": True,
     "history_days": 30,
     "launch_at_startup": True,
@@ -143,10 +147,175 @@ def settings_data() -> dict:
 
 def dictionary_entries() -> list[dict]:
     mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
+    corrections = read_json(CORRECTIONS_PATH, [])
+    learned = {
+        str(entry.get("spoken")): entry
+        for entry in corrections
+        if entry.get("status") == "learned"
+    }
     return [
-        {"spoken": spoken, "written": written}
+        {
+            "spoken": spoken,
+            "written": written,
+            "learned": spoken in learned,
+            "count": int(learned.get(spoken, {}).get("count", 0)),
+            "application_class": str(learned.get(spoken, {}).get("application_class", "")),
+        }
         for spoken, written in sorted(mapping.items(), key=lambda item: item[1].lower())
     ]
+
+
+def meaningful_text(value: str) -> str:
+    return "".join(
+        character
+        for character in value
+        if not character.isspace() and not unicodedata.category(character).startswith("P")
+    )
+
+
+def correction_candidates(original: str, corrected: str) -> list[dict]:
+    """Return conservative local replacements, never whole-sentence rewrites."""
+    before = original.strip()
+    after = corrected.strip()
+    if not before or not after or before == after:
+        return []
+    matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
+    if matcher.ratio() < 0.55:
+        return []
+    candidates: list[dict] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "replace":
+            continue
+        spoken = before[i1:i2].strip()
+        written = after[j1:j2].strip()
+        if not spoken or not written or len(spoken) > 32 or len(written) > 32:
+            continue
+        if not meaningful_text(spoken) or not meaningful_text(written):
+            continue
+        candidates.append(
+            {
+                "spoken": spoken,
+                "written": written,
+                "confidence": round(matcher.ratio(), 3),
+            }
+        )
+    return candidates
+
+
+def corrections_entries(status: str = "") -> list[dict]:
+    entries = read_json(CORRECTIONS_PATH, [])
+    if not status or status == "all":
+        return entries
+    return [entry for entry in entries if entry.get("status") == status]
+
+
+def latest_history(application_class: str = "") -> dict | None:
+    entries = history_entries()
+    if application_class:
+        folded = application_class.casefold()
+        matched = next(
+            (
+                entry
+                for entry in entries
+                if str(entry.get("application_class", "")).casefold() == folded
+            ),
+            None,
+        )
+        if matched:
+            return matched
+    return entries[0] if entries else None
+
+
+def propose_corrections(args: argparse.Namespace) -> list[dict]:
+    history = None
+    if args.history_id:
+        history = next(
+            (entry for entry in history_entries() if entry.get("id") == args.history_id),
+            None,
+        )
+    if history is None:
+        history = latest_history(args.application_class)
+    if history is None:
+        raise SystemExit("No recent LocalType dictation was found")
+    original = str(history.get("final_text", ""))
+    corrected = args.corrected.strip()
+    candidates = correction_candidates(original, corrected)
+    if not candidates:
+        raise SystemExit(
+            "No local word correction was found. Select the complete corrected sentence, not only one word."
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    entries = read_json(CORRECTIONS_PATH, [])
+    output: list[dict] = []
+    for candidate in candidates:
+        existing = next(
+            (
+                entry
+                for entry in entries
+                if entry.get("spoken") == candidate["spoken"]
+                and entry.get("written") == candidate["written"]
+                and entry.get("status") != "ignored"
+            ),
+            None,
+        )
+        if existing is None:
+            existing = {
+                "id": uuid.uuid4().hex,
+                "spoken": candidate["spoken"],
+                "written": candidate["written"],
+                "status": "pending",
+                "count": 1,
+                "confidence": candidate["confidence"],
+                "source": args.source,
+                "application_class": args.application_class
+                or str(history.get("application_class", "")),
+                "application_title": args.application_title
+                or str(history.get("application_title", "")),
+                "original_text": original,
+                "corrected_text": corrected,
+                "history_id": str(history.get("id", "")),
+                "created_at": now,
+                "updated_at": now,
+            }
+            entries.insert(0, existing)
+        else:
+            existing["count"] = int(existing.get("count", 1)) + 1
+            existing["updated_at"] = now
+            existing["corrected_text"] = corrected
+            existing["confidence"] = max(
+                float(existing.get("confidence", 0)), candidate["confidence"]
+            )
+        output.append(existing)
+    write_json(CORRECTIONS_PATH, entries[:500])
+    return output
+
+
+def accept_correction(correction_id: str) -> None:
+    entries = read_json(CORRECTIONS_PATH, [])
+    entry = next((item for item in entries if item.get("id") == correction_id), None)
+    if entry is None:
+        raise SystemExit("Correction was not found")
+    mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
+    mapping[str(entry["spoken"])] = str(entry["written"])
+    write_json(DICTIONARY_PATH, mapping)
+    entry["status"] = "learned"
+    entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+    write_json(CORRECTIONS_PATH, entries)
+
+
+def delete_correction(correction_id: str) -> None:
+    entries = read_json(CORRECTIONS_PATH, [])
+    entry = next((item for item in entries if item.get("id") == correction_id), None)
+    if entry and entry.get("status") == "learned":
+        mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
+        if mapping.get(str(entry.get("spoken"))) == str(entry.get("written")):
+            mapping.pop(str(entry.get("spoken")), None)
+            write_json(DICTIONARY_PATH, mapping)
+    write_json(
+        CORRECTIONS_PATH,
+        [item for item in entries if item.get("id") != correction_id],
+    )
 
 
 def history_entries(query: str = "") -> list[dict]:
@@ -227,6 +396,21 @@ def main() -> None:
     dictionary_delete = subparsers.add_parser("dictionary-delete")
     dictionary_delete.add_argument("spoken")
 
+    corrections_list = subparsers.add_parser("corrections-list")
+    corrections_list.add_argument("--status", default="all", choices=("all", "pending", "learned", "ignored"))
+    correction_propose = subparsers.add_parser("correction-propose")
+    correction_propose.add_argument("--corrected", required=True)
+    correction_propose.add_argument("--history-id", default="")
+    correction_propose.add_argument("--application-class", default="")
+    correction_propose.add_argument("--application-title", default="")
+    correction_propose.add_argument("--source", default="selection", choices=("selection", "history"))
+    correction_accept = subparsers.add_parser("correction-accept")
+    correction_accept.add_argument("id")
+    correction_ignore = subparsers.add_parser("correction-ignore")
+    correction_ignore.add_argument("id")
+    correction_delete = subparsers.add_parser("correction-delete")
+    correction_delete.add_argument("id")
+
     subparsers.add_parser("scenes-list")
     scene_toggle = subparsers.add_parser("scene-toggle")
     scene_toggle.add_argument("id")
@@ -250,6 +434,7 @@ def main() -> None:
     shortcuts_set = subparsers.add_parser("shortcuts-set")
     shortcuts_set.add_argument("smart")
     shortcuts_set.add_argument("raw")
+    shortcuts_set.add_argument("learn", nargs="?", default="CTRL + SHIFT + F9")
 
     args = parser.parse_args()
 
@@ -271,6 +456,27 @@ def main() -> None:
         mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
         mapping.pop(args.spoken, None)
         write_json(DICTIONARY_PATH, mapping)
+        corrections = read_json(CORRECTIONS_PATH, [])
+        for correction in corrections:
+            if correction.get("spoken") == args.spoken and correction.get("status") == "learned":
+                correction["status"] = "ignored"
+                correction["updated_at"] = datetime.now(timezone.utc).isoformat()
+        write_json(CORRECTIONS_PATH, corrections)
+    elif args.command == "corrections-list":
+        print(json.dumps(corrections_entries(args.status), ensure_ascii=False))
+    elif args.command == "correction-propose":
+        print(json.dumps(propose_corrections(args), ensure_ascii=False))
+    elif args.command == "correction-accept":
+        accept_correction(args.id)
+    elif args.command == "correction-ignore":
+        entries = read_json(CORRECTIONS_PATH, [])
+        for entry in entries:
+            if entry.get("id") == args.id:
+                entry["status"] = "ignored"
+                entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        write_json(CORRECTIONS_PATH, entries)
+    elif args.command == "correction-delete":
+        delete_correction(args.id)
     elif args.command == "scenes-list":
         print(json.dumps(read_json(SCENES_PATH, DEFAULT_SCENES), ensure_ascii=False))
     elif args.command == "scene-toggle":
@@ -322,6 +528,7 @@ def main() -> None:
         settings = settings_data()
         settings["smart_shortcut"] = args.smart
         settings["raw_shortcut"] = args.raw
+        settings["learn_shortcut"] = args.learn
         write_json(SETTINGS_PATH, settings)
 
 

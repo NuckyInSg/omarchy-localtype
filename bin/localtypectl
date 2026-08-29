@@ -245,23 +245,26 @@ def normalize_shortcut(value: str) -> str:
     return shortcut
 
 
-def configured_shortcuts() -> tuple[str, str]:
+def configured_shortcuts() -> tuple[str, str, str]:
     settings = saved_settings()
     return (
         normalize_shortcut(str(settings.get("smart_shortcut", "F9"))),
         normalize_shortcut(str(settings.get("raw_shortcut", "SHIFT + F9"))),
+        normalize_shortcut(str(settings.get("learn_shortcut", "CTRL + SHIFT + F9"))),
     )
 
 
 def managed_bindings() -> str:
     launcher = str(LAUNCHER)
-    smart_shortcut, raw_shortcut = configured_shortcuts()
+    smart_shortcut, raw_shortcut, learn_shortcut = configured_shortcuts()
     return (
         f"{BINDINGS_START}\n"
         f'hl.unbind("{smart_shortcut}")\n'
         f'hl.unbind("{raw_shortcut}")\n'
+        f'hl.unbind("{learn_shortcut}")\n'
         f'o.bind("{smart_shortcut}", "LocalType smart dictation", "{launcher} toggle smart")\n'
         f'o.bind("{raw_shortcut}", "LocalType verbatim dictation", "{launcher} toggle raw")\n'
+        f'o.bind("{learn_shortcut}", "LocalType learn correction", "{launcher} learn-correction")\n'
         f"{BINDINGS_END}\n"
     )
 
@@ -389,6 +392,7 @@ def runtime_digest() -> str:
     for path in (
         PLUGIN_ROOT / "runtime/server.py",
         PLUGIN_ROOT / "runtime/prompt_defaults.py",
+        PLUGIN_ROOT / "runtime/vocabulary.py",
         REQUIREMENTS,
     ):
         digest.update(path.read_bytes())
@@ -606,6 +610,74 @@ def notify(title: str, body: str) -> None:
     subprocess.Popen(["notify-send", "-a", "LocalType", title, body])
 
 
+def active_window() -> tuple[str, str]:
+    response = run(["hyprctl", "activewindow", "-j"])
+    try:
+        window = json.loads(response.stdout)
+    except json.JSONDecodeError:
+        window = {}
+    return str(window.get("class", "")), str(window.get("title", ""))
+
+
+def clipboard_text() -> str | None:
+    result = run(["wl-paste", "--no-newline"], timeout=2)
+    return result.stdout if result.returncode == 0 else None
+
+
+def restore_clipboard(previous: str | None) -> None:
+    if previous is None:
+        run(["wl-copy", "--clear"])
+    else:
+        run(["wl-copy"], input_text=previous)
+
+
+def learn_correction() -> int:
+    """Capture selected corrected text and create reviewable learning candidates."""
+    application_class, application_title = active_window()
+    previous_clipboard = clipboard_text()
+    terminal = bool(
+        re.search(
+            r"^(com\.mitchellh\.ghostty|Alacritty|kitty|foot|org\.wezfurlong\.wezterm)$",
+            application_class,
+        )
+    )
+    copy_keys = (
+        ["wtype", "-M", "ctrl", "-M", "shift", "-k", "c", "-m", "shift", "-m", "ctrl"]
+        if terminal
+        else ["wtype", "-M", "ctrl", "-k", "c", "-m", "ctrl"]
+    )
+    copied = run(copy_keys)
+    if copied.returncode != 0:
+        notify(localized("Could not read selection", "无法读取选中文本"), localized("Select the complete corrected sentence and try again.", "请选择修改后的完整句子，然后重试。"))
+        return 1
+    time.sleep(0.18)
+    corrected = clipboard_text()
+    restore_clipboard(previous_clipboard)
+    if corrected is None or not corrected.strip():
+        notify(localized("Nothing selected", "没有选中文字"), localized("Select the complete corrected sentence, then press the learning shortcut.", "请选择修改后的完整句子，再按学习快捷键。"))
+        return 1
+    proposal = run(
+        [
+            str(STORE_HELPER),
+            "correction-propose",
+            "--corrected",
+            corrected.strip(),
+            "--application-class",
+            application_class,
+            "--application-title",
+            application_title,
+            "--source",
+            "selection",
+        ]
+    )
+    if proposal.returncode != 0:
+        notify(localized("No correction found", "没有检测到可学习纠错"), proposal.stderr.strip() or localized("Select the complete corrected sentence and try again.", "请选择修改后的完整句子，然后重试。"))
+        return proposal.returncode
+    notify(localized("Correction ready to review", "纠错已等待确认"), localized("Review the detected word replacement in LocalType.", "请在 LocalType 中确认检测到的词语替换。"))
+    opened = run([str(Path(__file__).resolve()), "open", "learning"])
+    return opened.returncode
+
+
 def doctor() -> int:
     status = json.loads(run([str(Path(__file__).resolve()), "status"], check=True).stdout)
     checks = {
@@ -652,8 +724,8 @@ def main() -> int:
             print("omarchy-shell is not available", file=sys.stderr)
             return 1
         page = sys.argv[2] if len(sys.argv) > 2 else "workspace"
-        if page not in {"workspace", "history", "dictionary", "scenes", "models", "settings"}:
-            raise SystemExit("page must be workspace, history, dictionary, scenes, models, or settings")
+        if page not in {"workspace", "history", "dictionary", "learning", "scenes", "models", "settings"}:
+            raise SystemExit("page must be workspace, history, dictionary, learning, scenes, models, or settings")
         payload = json.dumps({"page": page}, separators=(",", ":"))
         result = run(["omarchy-shell", "shell", "summon", "app.localtype.voice-input", payload])
         if result.returncode != 0:
@@ -708,27 +780,30 @@ def main() -> int:
             run(["wl-copy"], check=True, input_text=text)
             notify(localized("Copied", "已复制"), localized("Text copied to the clipboard", "文字已复制到剪贴板"))
         return 0
+    if command == "learn-correction":
+        return learn_correction()
     if command == "shortcuts-set":
         if len(sys.argv) < 4:
-            raise SystemExit("usage: localtypectl shortcuts-set SMART RAW")
+            raise SystemExit("usage: localtypectl shortcuts-set SMART RAW [LEARN]")
         try:
             smart_shortcut = normalize_shortcut(sys.argv[2])
             raw_shortcut = normalize_shortcut(sys.argv[3])
+            learn_shortcut = normalize_shortcut(sys.argv[4] if len(sys.argv) > 4 else "CTRL + SHIFT + F9")
         except ValueError as error:
             print(str(error), file=sys.stderr)
             return 2
-        if smart_shortcut == raw_shortcut:
-            print("Smart and verbatim shortcuts must be different", file=sys.stderr)
+        if len({smart_shortcut, raw_shortcut, learn_shortcut}) != 3:
+            print("Smart, verbatim, and learning shortcuts must be different", file=sys.stderr)
             return 2
-        previous_smart, previous_raw = configured_shortcuts()
-        result = run([str(STORE_HELPER), "shortcuts-set", smart_shortcut, raw_shortcut])
+        previous_smart, previous_raw, previous_learn = configured_shortcuts()
+        result = run([str(STORE_HELPER), "shortcuts-set", smart_shortcut, raw_shortcut, learn_shortcut])
         if result.returncode != 0:
             print(result.stderr.strip(), file=sys.stderr)
             return result.returncode
         try:
             install_bindings()
         except Exception as error:
-            run([str(STORE_HELPER), "shortcuts-set", previous_smart, previous_raw])
+            run([str(STORE_HELPER), "shortcuts-set", previous_smart, previous_raw, previous_learn])
             try:
                 install_bindings()
             except Exception:
@@ -745,6 +820,11 @@ def main() -> int:
         "dictionary-list",
         "dictionary-set",
         "dictionary-delete",
+        "corrections-list",
+        "correction-propose",
+        "correction-accept",
+        "correction-ignore",
+        "correction-delete",
         "scenes-list",
         "scene-toggle",
         "scene-set",

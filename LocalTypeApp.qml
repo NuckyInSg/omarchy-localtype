@@ -18,6 +18,7 @@ Item {
   property var historyEntries: []
   property string historyQuery: ""
   property var dictionaryEntries: []
+  property var corrections: []
   property var scenes: []
   property var settings: ({})
   property int selectedSceneIndex: 0
@@ -25,6 +26,9 @@ Item {
   property var queuedArgs: []
   property string refreshAfterAction: ""
   property bool confirmClearHistory: false
+  property string correctionHistoryId: ""
+  property string correctionOriginalText: ""
+  property bool showAdvanced: false
   property string dataError: ""
 
   readonly property color foreground: Color.foreground
@@ -41,7 +45,9 @@ Item {
   function clamp(value, minimum, maximum) { return Math.max(minimum, Math.min(maximum, value)) }
   function l(english, chinese) { return language === "zh" ? chinese : english }
   function shortcut(mode) {
-    var value = String(mode === "smart" ? (settings.smart_shortcut || "F9") : (settings.raw_shortcut || "SHIFT + F9"))
+    var value = String(mode === "smart"
+      ? (settings.smart_shortcut || "F9")
+      : (mode === "learn" ? (settings.learn_shortcut || "CTRL + SHIFT + F9") : (settings.raw_shortcut || "SHIFT + F9")))
     return value.replace(/\s*\+\s*/g, "+").replace("SHIFT", "Shift").replace("CTRL", "Ctrl").replace("ALT", "Alt").replace("SUPER", "Super")
   }
   function sceneDescription(scene) {
@@ -63,27 +69,21 @@ Item {
     return String(styles[value] || value)
   }
   function pageTitle() {
-    if (currentPage === "workspace") return l("Voice Workspace", "语音工作台")
+    if (currentPage === "workspace") return l("Dictate", "听写")
     if (currentPage === "history") return l("Dictation History", "听写历史")
     if (currentPage === "dictionary") return l("Personal Dictionary", "个人词典")
-    if (currentPage === "scenes") return l("App Scenes", "应用场景")
-    if (currentPage === "models") return l("Local Models", "本地模型")
     return l("Settings", "设置")
   }
   function pageSubtitle() {
-    if (currentPage === "workspace") return l("Local smart voice input", "本地智能语音输入")
+    if (currentPage === "workspace") return l("Speak naturally and keep moving", "自然说话，保持专注")
     if (currentPage === "history") return l("Find, reuse, and compare original and polished transcripts", "查找、复用和对比原始语音与润色结果")
-    if (currentPage === "dictionary") return l("Improve names, product terms, and correction rules", "让专有名词、人名与纠错规则识别得更准确")
-    if (currentPage === "scenes") return l("Adapt tone, formatting, and output to the active app", "根据当前应用自动调整语气、格式与输出方式")
-    if (currentPage === "models") return l("Manage speech recognition and text polishing models", "管理语音识别与智能润色模型")
+    if (currentPage === "dictionary") return l("Names, terms, and corrections LocalType should remember", "让 LocalType 记住名字、术语和纠错")
     return l("Manage language, shortcuts, privacy, and local data", "管理语言、快捷键、隐私与本地数据")
   }
   function pageComponent() {
     if (currentPage === "workspace") return workspacePage
     if (currentPage === "history") return historyPage
     if (currentPage === "dictionary") return dictionaryPage
-    if (currentPage === "scenes") return scenesPage
-    if (currentPage === "models") return modelsPage
     return settingsPage
   }
   function open(payloadJson) {
@@ -93,8 +93,10 @@ Item {
       try {
         var payload = JSON.parse(String(payloadJson))
         var requestedPage = String(payload.page || "")
-        if (["workspace", "history", "dictionary", "scenes", "models", "settings"].indexOf(requestedPage) !== -1)
+        if (["workspace", "history", "dictionary", "settings"].indexOf(requestedPage) !== -1)
           currentPage = requestedPage
+        else if (requestedPage === "learning") currentPage = "dictionary"
+        else if (requestedPage === "scenes" || requestedPage === "models") currentPage = "settings"
       } catch (error) { /* Ignore malformed optional launch payloads. */ }
     }
     runtimeState.refresh()
@@ -120,8 +122,9 @@ Item {
       runtimeState.refresh()
       loadDataset("history", ["history-list"])
     } else if (currentPage === "history") loadDataset("history", ["history-list"])
-    else if (currentPage === "dictionary") loadDataset("dictionary", ["dictionary-list"])
-    else if (currentPage === "scenes") loadDataset("scenes", ["scenes-list"])
+    else if (currentPage === "dictionary") {
+      loadDataset("dictionary", ["dictionary-list"])
+    }
     else if (currentPage === "settings") loadDataset("settings", ["settings-show"])
     else runtimeState.refresh()
   }
@@ -142,7 +145,11 @@ Item {
       if (dataset === "history") {
         allHistory = Array.isArray(value) ? value : []
         filterHistory(historyQuery)
-      } else if (dataset === "dictionary") dictionaryEntries = Array.isArray(value) ? value : []
+      } else if (dataset === "dictionary") {
+        dictionaryEntries = Array.isArray(value) ? value : []
+        if (currentPage === "dictionary") Qt.callLater(function() { loadDataset("corrections", ["corrections-list"]) })
+      }
+      else if (dataset === "corrections") corrections = Array.isArray(value) ? value : []
       else if (dataset === "scenes") {
         scenes = Array.isArray(value) ? value : []
         selectedSceneIndex = clamp(selectedSceneIndex, 0, Math.max(0, scenes.length - 1))
@@ -166,6 +173,9 @@ Item {
         || String(entry.raw_text || "").toLowerCase().indexOf(needle) !== -1
         || String(entry.application_title || "").toLowerCase().indexOf(needle) !== -1
     })
+  }
+  function pendingCorrections() {
+    return corrections.filter(function(entry) { return String(entry.status || "pending") === "pending" })
   }
   function runAction(args, refreshDataset) {
     if (actionProcess.running) return
@@ -224,9 +234,22 @@ Item {
     if (key === "language") language = String(value)
     runAction(["setting-set", key, String(value)], "settings")
   }
-  function saveShortcuts(smart, raw) {
-    if (String(smart).trim() === "" || String(raw).trim() === "") return
-    runAction(["shortcuts-set", String(smart).trim(), String(raw).trim()], "settings")
+  function saveShortcuts(smart, raw, learn) {
+    if (String(smart).trim() === "" || String(raw).trim() === "" || String(learn).trim() === "") return
+    runAction(["shortcuts-set", String(smart).trim(), String(raw).trim(), String(learn).trim()], "settings")
+  }
+  function editAndLearn(entry) {
+    correctionHistoryId = String(entry.id || "")
+    correctionOriginalText = String(entry.final_text || "")
+    correctionText.text = correctionOriginalText
+    correctionEditor.open()
+  }
+  function proposeHistoryCorrection() {
+    var corrected = correctionText.text.trim()
+    if (corrected === "" || corrected === correctionOriginalText.trim()) return
+    correctionEditor.close()
+    currentPage = "dictionary"
+    runAction(["correction-propose", "--history-id", correctionHistoryId, "--corrected", corrected, "--source", "history"], "corrections")
   }
   function savePolishPrompt(prompt) {
     if (String(prompt).trim() === "") return
@@ -276,6 +299,10 @@ Item {
       if (root.refreshAfterAction === "history") root.loadDataset("history", ["history-list"])
       else if (root.refreshAfterAction === "dictionary") root.loadDataset("dictionary", ["dictionary-list"])
       else if (root.refreshAfterAction === "scenes") root.loadDataset("scenes", ["scenes-list"])
+      else if (root.refreshAfterAction === "corrections") {
+        root.loadDataset("corrections", ["corrections-list"])
+        root.loadDataset("dictionary", ["dictionary-list"])
+      }
       else if (root.refreshAfterAction === "settings") root.loadDataset("settings", ["settings-show"])
       root.refreshAfterAction = ""
     }
@@ -461,6 +488,7 @@ Item {
           }
 
           Row {
+            visible: false
             width: parent.width
             height: parent.height - 40
             spacing: 0
@@ -511,6 +539,7 @@ Item {
                       { id: "workspace", label: root.l("Workspace", "工作台"), icon: "󰆍" },
                       { id: "history", label: root.l("History", "历史"), icon: "󰋚" },
                       { id: "dictionary", label: root.l("Dictionary", "词典"), icon: "󰓹" },
+                      { id: "learning", label: root.l("Learning", "学习"), icon: "󰛨" },
                       { id: "scenes", label: root.l("Scenes", "场景"), icon: "󰙅" },
                       { id: "models", label: root.l("Models", "模型"), icon: "󰘚" },
                       { id: "settings", label: root.l("Settings", "设置"), icon: "󰒓" }
@@ -543,7 +572,7 @@ Item {
                   }
                 }
 
-                Item { width: 1; height: Math.max(0, parent.height - 76 - 6 * 64 - 18 * 3 - 232) }
+                Item { width: 1; height: Math.max(0, parent.height - 76 - 7 * 64 - 18 * 3 - 232) }
 
                 Surface {
                   width: parent.width
@@ -614,6 +643,134 @@ Item {
               }
             }
           }
+
+          Item {
+            width: parent.width
+            height: parent.height - 40
+
+            Column {
+              anchors.fill: parent
+              spacing: 0
+
+              Item {
+                width: parent.width
+                height: 104
+                Row {
+                  anchors.fill: parent
+                  anchors.leftMargin: 44
+                  anchors.rightMargin: 44
+                  spacing: 16
+                  Row {
+                    width: 310
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 14
+                    Text { text: "󰍬"; color: root.accent; font.family: root.fontFamily; font.pixelSize: 36; anchors.verticalCenter: parent.verticalCenter }
+                    Text { text: "LOCALTYPE"; color: root.accent; font.family: root.fontFamily; font.pixelSize: Math.max(19, Style.font.heading); font.bold: true; font.letterSpacing: 1.5; anchors.verticalCenter: parent.verticalCenter }
+                  }
+                  Item { width: Math.max(1, parent.width - 310 - 212 - 60 - 48); height: 1 }
+                  Surface {
+                    width: 212
+                    height: 48
+                    anchors.verticalCenter: parent.verticalCenter
+                    Row {
+                      anchors.centerIn: parent
+                      spacing: 10
+                      Rectangle { width: 9; height: 9; radius: 5; color: runtimeState.backendReady ? "#adda78" : root.urgent; anchors.verticalCenter: parent.verticalCenter }
+                      BodyText { text: root.l("Local · Private", "本地 · 私密"); anchors.verticalCenter: parent.verticalCenter }
+                    }
+                  }
+                  Button {
+                    width: 60
+                    height: 48
+                    iconText: "󰒓"
+                    bordered: true
+                    selected: root.currentPage === "settings"
+                    foreground: root.currentPage === "settings" ? root.accent : root.foreground
+                    accent: root.accent
+                    onClicked: root.navigate(root.currentPage === "settings" ? "workspace" : "settings")
+                  }
+                }
+              }
+
+              Row {
+                width: parent.width - 88
+                height: 56
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 4
+                Repeater {
+                  model: [
+                    { id: "workspace", label: root.l("Dictate", "听写"), icon: "󰍬" },
+                    { id: "history", label: root.l("History", "历史"), icon: "󰋚" },
+                    { id: "dictionary", label: root.l("Dictionary", "词典"), icon: "󰓹" }
+                  ]
+                  delegate: Button {
+                    required property var modelData
+                    width: (parent.width - 8) / 3
+                    height: parent.height
+                    text: modelData.label
+                    iconText: modelData.icon
+                    bordered: true
+                    selected: root.currentPage === modelData.id
+                    foreground: root.currentPage === modelData.id ? root.accent : root.foreground
+                    accent: root.accent
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.subtitle
+                    onClicked: root.navigate(modelData.id)
+                    Rectangle {
+                      visible: root.currentPage === parent.modelData.id
+                      height: 2
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.bottom: parent.bottom
+                      color: root.accent
+                    }
+                  }
+                }
+              }
+
+              Item {
+                width: parent.width
+                height: parent.height - 160
+                Loader {
+                  id: simplePageLoader
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  anchors.bottom: simpleFooter.top
+                  anchors.leftMargin: 48
+                  anchors.rightMargin: 48
+                  anchors.topMargin: 28
+                  anchors.bottomMargin: 12
+                  sourceComponent: root.pageComponent()
+                }
+                Item {
+                  id: simpleFooter
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.bottom: parent.bottom
+                  anchors.leftMargin: 48
+                  anchors.rightMargin: 48
+                  height: 42
+                  Rectangle { width: parent.width; height: 1; color: root.alpha(root.foreground, 0.12) }
+                  MutedText {
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.verticalCenterOffset: 4
+                    text: (runtimeState.backendReady ? root.l("READY", "就绪") : (runtimeState.serviceActive ? root.l("LOADING", "加载中") : root.l("OFFLINE", "离线")))
+                      + root.l(" · Chinese · Local inference", " · 中文 · 本地推理")
+                  }
+                  MutedText {
+                    visible: root.dataError !== ""
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.verticalCenterOffset: 4
+                    text: root.dataError
+                    color: root.urgent
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -624,6 +781,7 @@ Item {
     Item {
       PageHeader {
         id: workspaceHeader
+        visible: false
         width: parent.width
         actionText: root.shortcut(root.selectedMode) + (runtimeState.recording ? root.l(" Stop", " 停止") : root.l(" Start", " 开始"))
         actionIcon: runtimeState.recording ? "󰓛" : "󰍬"
@@ -631,6 +789,7 @@ Item {
       }
 
       Column {
+        visible: false
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: workspaceHeader.bottom
@@ -751,6 +910,111 @@ Item {
           }
         }
       }
+
+      Column {
+        anchors.fill: parent
+        spacing: 22
+
+        Row {
+          width: parent.width
+          height: 48
+          Item { width: parent.width - 320; height: 1 }
+          Row {
+            width: 320
+            height: 44
+            Button { width: 160; height: parent.height; text: root.l("Polished", "智能润色"); selected: root.selectedMode === "smart"; bordered: true; foreground: root.selectedMode === "smart" ? root.accent : root.foreground; accent: root.accent; onClicked: root.selectedMode = "smart" }
+            Button { width: 160; height: parent.height; text: root.l("Verbatim", "原文听写"); selected: root.selectedMode === "raw"; bordered: true; foreground: root.selectedMode === "raw" ? root.accent : root.foreground; accent: root.accent; onClicked: root.selectedMode = "raw" }
+          }
+        }
+
+        Surface {
+          width: parent.width
+          height: 176
+          Row {
+            anchors.fill: parent
+            anchors.margins: 28
+            spacing: 28
+            Text {
+              width: 150
+              text: runtimeState.processing ? "󰔟" : (runtimeState.recording ? "󰑊" : "󰍬")
+              color: runtimeState.recording ? root.urgent : root.accent
+              font.family: root.fontFamily
+              font.pixelSize: 62
+              anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignHCenter
+            }
+            Column {
+              width: parent.width - 150 - 246 - 56
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: 12
+              TitleText { width: parent.width; text: root.phaseTitle(); font.pixelSize: Style.font.display; wrapMode: Text.Wrap }
+              MutedText {
+                width: parent.width
+                text: runtimeState.recording
+                  ? root.l("Press the shortcut again when you finish.", "说完后再次按快捷键即可停止。")
+                  : root.l("LocalType will transcribe and polish before inserting.", "LocalType 会先识别并润色，再输入文字。")
+                font.pixelSize: Style.font.subtitle
+                wrapMode: Text.Wrap
+              }
+            }
+            Button {
+              width: 246
+              height: 62
+              anchors.verticalCenter: parent.verticalCenter
+              text: runtimeState.recording ? root.l("Stop recording", "停止录音") : root.l("Start recording", "开始录音")
+              iconText: runtimeState.recording ? "󰓛" : "󰑊"
+              bordered: true
+              borderSpec: Border.flat(root.accent, 1)
+              foreground: runtimeState.recording ? root.urgent : root.accent
+              accent: root.accent
+              fontSize: Style.font.subtitle
+              onClicked: root.primaryAction()
+            }
+          }
+        }
+
+        Text { text: root.l("Today", "今天"); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.heading; font.bold: true }
+
+        Surface {
+          width: parent.width
+          height: parent.height - 290
+          Item {
+            width: parent.width
+            height: parent.height
+            Column {
+              width: parent.width
+              Repeater {
+                model: root.allHistory.slice(0, 4)
+                delegate: Item {
+                id: recentRow
+                required property var modelData
+                required property int index
+                width: parent.width
+                height: parent.parent.height / Math.max(1, Math.min(4, root.allHistory.length))
+                Row {
+                  anchors.fill: parent
+                  anchors.leftMargin: 28
+                  anchors.rightMargin: 24
+                  spacing: 20
+                  MutedText { width: 120; text: root.formatTime(recentRow.modelData.created_at); anchors.verticalCenter: parent.verticalCenter }
+                  BodyText { width: parent.width - 120 - 110 - 66 - 60; text: String(recentRow.modelData.final_text || ""); font.pixelSize: Style.font.subtitle; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
+                  Button { width: 110; text: root.l("Correct", "纠正"); iconText: "󰏫"; foreground: root.accent; visible: recentRow.index === 0; anchors.verticalCenter: parent.verticalCenter; onClicked: root.editAndLearn(recentRow.modelData) }
+                  Button { width: 66; iconText: "󰆏"; foreground: root.foreground; anchors.verticalCenter: parent.verticalCenter; onClicked: root.runAction(["copy-text", String(recentRow.modelData.final_text || "")], "") }
+                }
+                Rectangle { visible: recentRow.index < Math.min(4, root.allHistory.length) - 1; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: root.alpha(root.foreground, 0.10) }
+                }
+              }
+            }
+            Column {
+              visible: root.allHistory.length === 0
+              anchors.centerIn: parent
+              spacing: 12
+              Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰋚"; color: root.muted; font.family: root.fontFamily; font.pixelSize: 34 }
+              MutedText { text: root.l("Your recent dictations will appear here.", "最近的听写会显示在这里。"); font.pixelSize: Style.font.subtitle }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -759,6 +1023,7 @@ Item {
     Item {
       PageHeader {
         id: historyHeader
+        visible: false
         width: parent.width
         actionText: root.confirmClearHistory ? root.l("Click again to confirm", "再次点击确认清空") : root.l("Clear history", "清空历史")
         actionIcon: "󰩺"
@@ -774,6 +1039,7 @@ Item {
       }
 
       Column {
+        visible: false
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: historyHeader.bottom
@@ -833,10 +1099,14 @@ Item {
                     MutedText { text: root.formatDuration(parent.parent.parent.modelData.duration_ms) }
                     Rectangle { width: 1; height: 18; color: root.alpha(root.foreground, 0.18) }
                     MutedText { text: String(parent.parent.parent.modelData.application_title || parent.parent.parent.modelData.application_class || root.l("Current app", "当前应用")) }
-                    Item { width: Math.max(1, parent.width - 430); height: 1 }
+                    Item { width: Math.max(1, parent.width - 690); height: 1 }
                     Button {
                       width: 42; iconText: "󰆏"; foreground: root.foreground
                       onClicked: root.runAction(["copy-text", String(parent.parent.parent.parent.modelData.final_text || "")], "")
+                    }
+                    Button {
+                      width: 138; text: root.l("Correct & learn", "纠正并学习"); iconText: "󰛨"; bordered: true; foreground: root.accent; accent: root.accent
+                      onClicked: root.editAndLearn(parent.parent.parent.parent.modelData)
                     }
                     Button {
                       width: 42; iconText: "󰩺"; foreground: root.muted
@@ -876,13 +1146,102 @@ Item {
           }
         }
       }
+
+      Column {
+        anchors.fill: parent
+        spacing: 16
+        Row {
+          width: parent.width
+          height: 66
+          Column {
+            width: 310
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 4
+            TitleText { text: root.l("History", "历史") }
+            MutedText { text: root.l("Stored only on this device", "仅保存在本机") }
+          }
+          TextField {
+            width: parent.width - 310 - 190
+            anchors.verticalCenter: parent.verticalCenter
+            placeholderText: root.l("Search dictations…", "搜索听写内容…")
+            foreground: root.foreground
+            accent: root.accent
+            onTextChanged: { root.historyQuery = text; root.filterHistory(text) }
+          }
+          Item { width: 16; height: 1 }
+          Button {
+            width: 174
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.confirmClearHistory ? root.l("Confirm clear", "确认清空") : root.l("Clear history", "清空历史")
+            bordered: true
+            foreground: root.confirmClearHistory ? root.urgent : root.muted
+            onClicked: {
+              if (!root.confirmClearHistory) { root.confirmClearHistory = true; clearConfirmTimer.restart() }
+              else { root.confirmClearHistory = false; root.runAction(["history-clear"], "history") }
+            }
+          }
+        }
+
+        Surface {
+          width: parent.width
+          height: parent.height - 82
+          ScrollView {
+            id: simpleHistoryView
+            width: parent.width
+            height: parent.height
+            clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            Column {
+              width: simpleHistoryView.availableWidth
+              Repeater {
+                model: root.historyEntries
+                delegate: Item {
+                  id: simpleHistoryRow
+                  required property var modelData
+                  width: parent.width
+                  height: 116
+                  Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: 26
+                    anchors.rightMargin: 22
+                    spacing: 18
+                    Column {
+                      width: 108
+                      anchors.verticalCenter: parent.verticalCenter
+                      spacing: 8
+                      BodyText { text: root.formatTime(simpleHistoryRow.modelData.created_at); font.pixelSize: Style.font.subtitle }
+                      SectionLabel { text: simpleHistoryRow.modelData.mode === "smart" ? root.l("POLISHED", "智能润色") : root.l("VERBATIM", "原文听写"); color: simpleHistoryRow.modelData.mode === "smart" ? root.accent : root.muted }
+                    }
+                    BodyText { width: parent.width - 108 - 18 - 288; text: String(simpleHistoryRow.modelData.final_text || ""); font.pixelSize: Style.font.subtitle; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
+                    Button { width: 116; text: root.l("Correct", "纠正"); iconText: "󰏫"; foreground: root.accent; anchors.verticalCenter: parent.verticalCenter; onClicked: root.editAndLearn(simpleHistoryRow.modelData) }
+                    Button { width: 58; iconText: "󰆏"; foreground: root.foreground; anchors.verticalCenter: parent.verticalCenter; onClicked: root.runAction(["copy-text", String(simpleHistoryRow.modelData.final_text || "")], "") }
+                    Button { width: 58; iconText: "󰩺"; foreground: root.muted; anchors.verticalCenter: parent.verticalCenter; onClicked: root.runAction(["history-delete", String(simpleHistoryRow.modelData.id)], "history") }
+                  }
+                  Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: root.alpha(root.foreground, 0.10) }
+                }
+              }
+              Item {
+                visible: root.historyEntries.length === 0
+                width: parent.width
+                height: 220
+                Column {
+                  anchors.centerIn: parent
+                  spacing: 12
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰋚"; color: root.muted; font.family: root.fontFamily; font.pixelSize: 34 }
+                  MutedText { anchors.horizontalCenter: parent.horizontalCenter; text: root.historyQuery === "" ? root.l("No dictation history yet", "还没有听写记录") : root.l("No matching records", "没有找到匹配记录"); font.pixelSize: Style.font.subtitle }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 
   Component {
     id: dictionaryPage
     Item {
-      PageHeader { id: dictionaryHeader; width: parent.width; actionText: root.l("Refresh", "刷新"); actionIcon: "󰑐"; onActionClicked: root.loadDataset("dictionary", ["dictionary-list"]) }
+      PageHeader { id: dictionaryHeader; width: parent.width; actionText: "" }
 
       Column {
         anchors.left: parent.left
@@ -920,11 +1279,46 @@ Item {
           }
         }
 
-        TextField { width: parent.width; placeholderText: root.l("Search entries…", "搜索词条…"); foreground: root.foreground; accent: root.accent }
+        Column {
+          id: reviewSection
+          visible: root.pendingCorrections().length > 0
+          width: parent.width
+          height: visible ? 42 + Math.min(2, root.pendingCorrections().length) * 76 : 0
+          spacing: 8
+          Text {
+            text: root.l("Review corrections · " + root.pendingCorrections().length, "确认纠错 · " + root.pendingCorrections().length)
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.heading
+            font.bold: true
+          }
+          Repeater {
+            model: root.pendingCorrections().slice(0, 2)
+            delegate: Surface {
+              id: pendingCard
+              required property var modelData
+              width: reviewSection.width
+              height: 68
+              borderSpec: Border.flat(root.accent, 1)
+              Row {
+                anchors.fill: parent
+                anchors.margins: 12
+                spacing: 12
+                BodyText { width: (parent.width - 250) * 0.44; text: String(pendingCard.modelData.spoken || ""); elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
+                Text { width: 28; text: "→"; color: root.muted; font.family: root.fontFamily; font.pixelSize: Style.font.subtitle; anchors.verticalCenter: parent.verticalCenter }
+                BodyText { width: (parent.width - 250) * 0.56; text: String(pendingCard.modelData.written || ""); color: root.accent; elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
+                Button { width: 84; text: root.l("Ignore", "忽略"); foreground: root.muted; bordered: true; anchors.verticalCenter: parent.verticalCenter; onClicked: root.runAction(["correction-ignore", String(pendingCard.modelData.id)], "corrections") }
+                Button { width: 104; text: root.l("Learn", "学习"); foreground: root.accent; accent: root.accent; bordered: true; anchors.verticalCenter: parent.verticalCenter; onClicked: root.runAction(["correction-accept", String(pendingCard.modelData.id)], "corrections") }
+              }
+            }
+          }
+        }
+
+        TextField { visible: false; width: parent.width; placeholderText: root.l("Search entries…", "搜索词条…"); foreground: root.foreground; accent: root.accent }
 
         Surface {
           width: parent.width
-          height: parent.height - 184
+          height: Math.max(220, parent.height - 130 - reviewSection.height - (reviewSection.visible ? 18 : 0))
           Column {
             anchors.fill: parent
             anchors.margins: 18
@@ -964,6 +1358,92 @@ Item {
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  Component {
+    id: learningPage
+    Item {
+      PageHeader { id: learningHeader; width: parent.width; actionText: root.l("Refresh", "刷新"); actionIcon: "󰑐"; onActionClicked: root.loadDataset("corrections", ["corrections-list"]) }
+
+      Column {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: learningHeader.bottom
+        anchors.bottom: parent.bottom
+        spacing: 16
+
+        Surface {
+          width: parent.width
+          height: 96
+          borderSpec: Border.flat(root.accent, 1)
+          Row {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 16
+            Text { text: "󰛨"; color: root.accent; font.family: root.fontFamily; font.pixelSize: 30; anchors.verticalCenter: parent.verticalCenter }
+            Column {
+              width: parent.width - 70
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: 6
+              BodyText { text: root.l("Select a complete corrected sentence, then press " + root.shortcut("learn") + ".", "选中修改后的完整句子，然后按 " + root.shortcut("learn") + "。"); font.pixelSize: Style.font.subtitle; font.bold: true }
+              MutedText { text: root.l("LocalType extracts only local word replacements. Nothing is learned until you approve it here.", "LocalType 只提取局部词语替换；在这里确认前不会学习任何内容。") }
+            }
+          }
+        }
+
+        ScrollView {
+          id: correctionsView
+          width: parent.width
+          height: parent.height - 112
+          clip: true
+          ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+          Column {
+            width: correctionsView.availableWidth
+            spacing: 12
+            SectionLabel { text: root.l("CORRECTIONS · " + root.corrections.length, "纠错记录 · " + root.corrections.length + " 条") }
+            Repeater {
+              model: root.corrections
+              delegate: Surface {
+                id: correctionCard
+                required property var modelData
+                width: correctionsView.availableWidth
+                height: 154
+                borderSpec: Border.flat(modelData.status === "pending" ? root.accent : root.alpha(root.foreground, 0.18), 1)
+                Column {
+                  anchors.fill: parent
+                  anchors.margins: 16
+                  spacing: 11
+                  Row {
+                    width: parent.width
+                    spacing: 12
+                    SectionLabel { text: correctionCard.modelData.status === "pending" ? root.l("PENDING", "待确认") : (correctionCard.modelData.status === "learned" ? root.l("LEARNED", "已学习") : root.l("IGNORED", "已忽略")); color: correctionCard.modelData.status === "pending" ? root.accent : root.muted }
+                    MutedText { text: String(correctionCard.modelData.application_title || correctionCard.modelData.application_class || root.l("Unknown app", "未知应用")) }
+                    MutedText { text: root.l("Seen ", "出现 ") + Number(correctionCard.modelData.count || 1) + root.l("×", " 次") }
+                    Item { width: Math.max(1, parent.width - 570); height: 1 }
+                    Button { visible: correctionCard.modelData.status === "pending"; width: 92; text: root.l("Ignore", "忽略"); bordered: true; foreground: root.muted; onClicked: root.runAction(["correction-ignore", String(correctionCard.modelData.id)], "corrections") }
+                    Button { visible: correctionCard.modelData.status === "pending"; width: 104; text: root.l("Learn", "学习"); iconText: "󰆓"; bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.runAction(["correction-accept", String(correctionCard.modelData.id)], "corrections") }
+                    Button { visible: correctionCard.modelData.status !== "pending"; width: 92; text: root.l("Delete", "删除"); iconText: "󰩺"; bordered: true; foreground: root.muted; onClicked: root.runAction(["correction-delete", String(correctionCard.modelData.id)], "corrections") }
+                  }
+                  Row {
+                    width: parent.width
+                    spacing: 14
+                    Surface { width: (parent.width - 46) * 0.46; height: 50; Column { anchors.fill: parent; anchors.margins: 8; spacing: 3; SectionLabel { text: root.l("HEARD AS", "识别为") } BodyText { text: String(correctionCard.modelData.spoken || ""); elide: Text.ElideRight; width: parent.width } } }
+                    Text { text: "→"; color: root.accent; font.pixelSize: 22; anchors.verticalCenter: parent.verticalCenter }
+                    Surface { width: (parent.width - 46) * 0.54; height: 50; Column { anchors.fill: parent; anchors.margins: 8; spacing: 3; SectionLabel { text: root.l("CORRECTED TO", "修正为") } BodyText { text: String(correctionCard.modelData.written || ""); color: root.accent; elide: Text.ElideRight; width: parent.width } } }
+                  }
+                }
+              }
+            }
+            Surface {
+              visible: root.corrections.length === 0
+              width: parent.width
+              height: 180
+              Column { anchors.centerIn: parent; spacing: 12; Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰛨"; color: root.muted; font.family: root.fontFamily; font.pixelSize: 34 } MutedText { anchors.horizontalCenter: parent.horizontalCenter; text: root.l("No learned corrections yet", "还没有纠错学习记录"); font.pixelSize: Style.font.subtitle } }
             }
           }
         }
@@ -1170,8 +1650,9 @@ Item {
   Component {
     id: settingsPage
     Item {
-      PageHeader { id: settingsHeader; width: parent.width; actionText: root.l("Run diagnostics", "运行自检"); actionIcon: "󰓙"; onActionClicked: root.runAction(["doctor"], "") }
+      PageHeader { id: settingsHeader; visible: false; width: parent.width; actionText: root.l("Run diagnostics", "运行自检"); actionIcon: "󰓙"; onActionClicked: root.runAction(["doctor"], "") }
       ScrollView {
+        visible: false
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: settingsHeader.bottom
@@ -1183,7 +1664,7 @@ Item {
           spacing: 18
           Surface {
             width: parent.width
-            height: 222
+            height: 280
             Column {
               anchors.fill: parent
               anchors.margins: 18
@@ -1201,6 +1682,12 @@ Item {
                 BodyText { width: 180; text: root.l("Verbatim dictation", "原文听写"); anchors.verticalCenter: parent.verticalCenter }
                 TextField { id: rawShortcutField; width: parent.width - 196; text: String(root.settings.raw_shortcut || "SHIFT + F9"); placeholderText: "SHIFT + F9"; foreground: root.foreground; accent: root.accent }
               }
+              Row {
+                width: parent.width
+                spacing: 16
+                BodyText { width: 180; text: root.l("Learn correction", "纠错学习"); anchors.verticalCenter: parent.verticalCenter }
+                TextField { id: learnShortcutField; width: parent.width - 196; text: String(root.settings.learn_shortcut || "CTRL + SHIFT + F9"); placeholderText: "CTRL + SHIFT + F9"; foreground: root.foreground; accent: root.accent }
+              }
               Button {
                 width: parent.width
                 text: root.l("Apply shortcuts", "应用快捷键")
@@ -1208,7 +1695,7 @@ Item {
                 bordered: true
                 foreground: root.accent
                 accent: root.accent
-                onClicked: root.saveShortcuts(smartShortcutField.text, rawShortcutField.text)
+                onClicked: root.saveShortcuts(smartShortcutField.text, rawShortcutField.text, learnShortcutField.text)
               }
             }
           }
@@ -1289,10 +1776,163 @@ Item {
               Row { width: parent.width; MutedText { width: 220; text: root.l("Personal dictionary", "个人词典") } BodyText { width: parent.width - 220; text: "~/.config/localtype/dictionary.json"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
               Row { width: parent.width; MutedText { width: 220; text: root.l("Dictation history", "听写历史") } BodyText { width: parent.width - 220; text: "~/.local/state/localtype/history.json"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
               Row { width: parent.width; MutedText { width: 220; text: root.l("Models and runtime", "模型与环境") } BodyText { width: parent.width - 220; text: "~/.local/share/localtype/"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
-              Row { width: parent.width; MutedText { width: 220; text: root.l("Version", "版本") } BodyText { width: parent.width - 220; text: "LocalType 0.3.0"; horizontalAlignment: Text.AlignRight } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Version", "版本") } BodyText { width: parent.width - 220; text: "LocalType 0.5.0"; horizontalAlignment: Text.AlignRight } }
             }
           }
         }
+      }
+
+      ScrollView {
+        id: simpleSettingsScroll
+        anchors.fill: parent
+        clip: true
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        Connections {
+          target: root
+          function onShowAdvancedChanged() {
+            if (!root.showAdvanced) return
+            Qt.callLater(function() {
+              simpleSettingsScroll.contentItem.contentY = Math.max(0, simpleSettingsScroll.contentItem.contentHeight - simpleSettingsScroll.height)
+            })
+          }
+        }
+        Column {
+          width: parent.width
+          spacing: 12
+
+          Column {
+            width: parent.width
+            height: 58
+            spacing: 4
+            TitleText { text: root.l("Settings", "设置") }
+            MutedText { text: root.l("Essentials first; advanced controls stay tucked away", "常用设置优先，高级选项默认收起"); font.pixelSize: Style.font.subtitle }
+          }
+
+          Surface {
+            width: parent.width
+            height: 300
+            Column {
+              anchors.fill: parent
+              anchors.margins: 18
+              spacing: 12
+              SectionLabel { text: root.l("GENERAL", "常规") }
+              Dropdown { width: parent.width; label: root.l("App language", "应用语言"); value: String(root.settings.language || "en"); options: [{ value: "en", label: "English" }, { value: "zh", label: "简体中文" }]; foreground: root.foreground; accent: root.accent; onChanged: function(value) { root.settingSet("language", value) } }
+              Dropdown { width: parent.width; label: root.l("Default dictation mode", "默认听写模式"); value: String(root.settings.default_mode || "smart"); options: [{ value: "smart", label: root.l("Polished", "智能润色") }, { value: "raw", label: root.l("Verbatim", "原文听写") }]; foreground: root.foreground; accent: root.accent; onChanged: function(value) { root.settingSet("default_mode", value) } }
+              LabeledToggle { label: root.l("Save text history", "保存文字历史"); detail: root.l("Text stays on this device; audio is never stored", "文字只保存在本机，录音不会保存"); checked: root.settings.keep_history !== false; onToggled: root.settingSet("keep_history", checked) }
+              LabeledToggle { label: root.l("Paste terminal input as one block", "终端使用整段粘贴"); detail: root.l("Prevents terminal apps from splitting one sentence", "避免终端应用把一句话拆成多段"); checked: root.settings.terminal_paste !== false; onToggled: root.settingSet("terminal_paste", checked) }
+            }
+          }
+
+          Surface {
+            width: parent.width
+            height: 254
+            Column {
+              anchors.fill: parent
+              anchors.margins: 18
+              spacing: 12
+              SectionLabel { text: root.l("SHORTCUTS", "快捷键") }
+              Row { width: parent.width; spacing: 16; BodyText { width: 200; text: root.l("Polished dictation", "智能润色"); anchors.verticalCenter: parent.verticalCenter } TextField { id: simpleSmartShortcutField; width: parent.width - 216; text: String(root.settings.smart_shortcut || "F9"); placeholderText: "F9"; foreground: root.foreground; accent: root.accent } }
+              Row { width: parent.width; spacing: 16; BodyText { width: 200; text: root.l("Verbatim dictation", "原文听写"); anchors.verticalCenter: parent.verticalCenter } TextField { id: simpleRawShortcutField; width: parent.width - 216; text: String(root.settings.raw_shortcut || "SHIFT + F9"); placeholderText: "SHIFT + F9"; foreground: root.foreground; accent: root.accent } }
+              Row { width: parent.width; spacing: 16; BodyText { width: 200; text: root.l("Learn correction", "纠错学习"); anchors.verticalCenter: parent.verticalCenter } TextField { id: simpleLearnShortcutField; width: parent.width - 216; text: String(root.settings.learn_shortcut || "CTRL + SHIFT + F9"); placeholderText: "CTRL + SHIFT + F9"; foreground: root.foreground; accent: root.accent } }
+              Button { width: parent.width; text: root.l("Apply shortcuts", "应用快捷键"); bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.saveShortcuts(simpleSmartShortcutField.text, simpleRawShortcutField.text, simpleLearnShortcutField.text) }
+            }
+          }
+
+          Surface {
+            width: parent.width
+            height: root.showAdvanced ? 514 : 72
+            Column {
+              anchors.fill: parent
+              anchors.margins: 18
+              spacing: 12
+              Button {
+                width: parent.width
+                height: 36
+                text: root.showAdvanced ? root.l("Hide advanced settings", "收起高级设置") : root.l("Advanced settings", "高级设置")
+                iconText: root.showAdvanced ? "󰅃" : "󰅀"
+                leftAlign: true
+                foreground: root.muted
+                onClicked: root.showAdvanced = !root.showAdvanced
+              }
+              Column {
+                visible: root.showAdvanced
+                width: parent.width
+                spacing: 10
+                SectionLabel { text: root.l("POLISH PROMPT", "润色提示词") }
+                MutedText { width: parent.width; text: root.l("Edit the local polisher instruction only when you need custom behavior.", "仅在需要自定义润色行为时修改本地模型提示词。"); wrapMode: Text.Wrap }
+                TextArea {
+                  id: simplePolishPromptField
+                  width: parent.width
+                  height: 270
+                  text: String(root.settings.polish_prompt || "")
+                  color: root.foreground
+                  placeholderTextColor: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  wrapMode: TextEdit.Wrap
+                  background: Surface {}
+                  padding: 12
+                }
+                Row {
+                  width: parent.width
+                  spacing: 12
+                  Button { width: (parent.width - parent.spacing) / 2; text: root.l("Restore default", "恢复默认"); bordered: true; foreground: root.foreground; onClicked: root.runAction(["setting-reset", "polish_prompt"], "settings") }
+                  Button { width: (parent.width - parent.spacing) / 2; text: root.l("Save prompt", "保存提示词"); bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.savePolishPrompt(simplePolishPromptField.text) }
+                }
+                Row {
+                  width: parent.width
+                  spacing: 12
+                  LabeledToggle { width: parent.width - 184; label: root.l("Preload local models at login", "登录时预热本地模型"); checked: root.settings.prewarm_models !== false; onToggled: root.settingSet("prewarm_models", checked) }
+                  Button { width: 172; text: root.l("Diagnostics", "运行自检"); bordered: true; foreground: root.muted; onClicked: root.runAction(["doctor"], "") }
+                }
+              }
+            }
+          }
+          MutedText { width: parent.width; text: root.l("LocalType 0.5.0 · Audio and history stay on this device", "LocalType 0.5.0 · 音频与历史数据都留在本机"); horizontalAlignment: Text.AlignHCenter }
+        }
+      }
+    }
+  }
+
+  Popup {
+    id: correctionEditor
+    parent: appWindow.contentItem
+    anchors.centerIn: parent
+    width: Math.min(820, parent.width - 80)
+    height: 430
+    modal: true
+    focus: true
+    closePolicy: Popup.CloseOnEscape
+    Overlay.modal: Rectangle { color: root.alpha(root.background, 0.74) }
+    background: Rectangle {
+      color: root.deepColor
+      border.color: root.accent
+      border.width: 1
+      radius: Math.max(4, Style.cornerRadius)
+    }
+    contentItem: Column {
+      anchors.fill: parent
+      anchors.margins: 22
+      spacing: 14
+      TitleText { text: root.l("Correct & learn", "纠正并学习"); font.pixelSize: Style.font.heading }
+      MutedText { width: parent.width; text: root.l("Edit the complete sentence. LocalType will detect local word replacements and ask you to approve them.", "编辑完整句子，LocalType 会检测局部词语替换并让你确认。") ; wrapMode: Text.Wrap }
+      TextArea {
+        id: correctionText
+        width: parent.width
+        height: 210
+        color: root.foreground
+        placeholderTextColor: root.muted
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.subtitle
+        wrapMode: TextEdit.Wrap
+        background: Surface {}
+        padding: 12
+      }
+      Row {
+        width: parent.width
+        spacing: 12
+        Button { width: (parent.width - parent.spacing) / 2; text: root.l("Cancel", "取消"); bordered: true; foreground: root.foreground; onClicked: correctionEditor.close() }
+        Button { width: (parent.width - parent.spacing) / 2; text: root.l("Find corrections", "检测纠错"); iconText: "󰛨"; bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.proposeHistoryCorrection() }
       }
     }
   }

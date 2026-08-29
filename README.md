@@ -21,6 +21,7 @@ The plugin installs its runtime, models, user-level systemd service, desktop lau
 |---|---|
 | `F9` | Start or stop smart dictation |
 | `Shift+F9` | Start or stop verbatim dictation |
+| `Ctrl+Shift+F9` | Learn a correction from the selected corrected sentence |
 
 LocalType types text but never presses Enter, sends a message, or executes a terminal command. Terminal apps receive one bracketed-paste event so TUIs such as Codex do not split it; Chromium-based browsers use one clipboard paste to avoid dropping the first virtual character.
 
@@ -30,21 +31,27 @@ Open the desktop app from the Omarchy launcher, the bar panel, or the CLI:
 localtypectl open
 ```
 
-The native Omarchy app includes Workspace, History, Dictionary, Scenes, Models, and Settings pages. It follows the active Omarchy theme.
+The native Omarchy app follows the active theme and keeps its main navigation to three tasks: **Dictate**, **History**, and **Dictionary**. Settings live behind the gear button; model diagnostics, scene rules, and prompt tuning stay out of the everyday workflow.
+
+### Correction learning
+
+When LocalType gets a name or product term wrong, correct the text in the target app, select the complete corrected sentence, and press `Ctrl+Shift+F9`. LocalType compares it with the most recent dictation from that app and places conservative word-level candidates in **Dictionary → Review corrections**. Nothing is learned until you approve it.
+
+You can also choose **Correct & learn** on any History entry and edit the sentence inside LocalType. Accepted corrections are saved as `heard form → canonical form` replacements and the canonical terms are passed to Qwen3-ASR as personal vocabulary context on later dictations. Large rewrites, deletions, insertions, and punctuation-only edits are not learned.
 
 ### Language and shortcuts
 
 The app defaults to English. Select **Settings → App language → 简体中文** to switch the desktop app, bar panel, and notifications to Chinese.
 
-Edit both shortcut fields in **Settings → Shortcuts**, then choose **Apply shortcuts**. You can also update them from the CLI:
+Edit the three shortcut fields in **Settings → Shortcuts**, then choose **Apply shortcuts**. You can also update them from the CLI:
 
 ```bash
-localtypectl shortcuts-set "F9" "SHIFT + F9"
+localtypectl shortcuts-set "F9" "SHIFT + F9" "CTRL + SHIFT + F9"
 ```
 
 ### Editable polish prompt
 
-Open **Settings → Polish Prompt** to inspect and edit the complete Chat Prompt used by Qwen3-0.6B. The default JSON contains the system instruction and input/output examples; `{context}` expands to the active app class. Plain-text system prompts are also supported. Saved changes apply to the next dictation without restarting the service.
+Open **Settings → Advanced settings → Polish Prompt** to inspect and edit the complete Chat Prompt used by Qwen3-0.6B. The default JSON contains the system instruction and input/output examples; `{context}` expands to the active app class. Plain-text system prompts are also supported. Saved changes apply to the next dictation without restarting the service.
 
 ## Requirements
 
@@ -91,6 +98,7 @@ omarchy plugin remove app.localtype.voice-input
 - Plugin: `~/.config/omarchy/plugins/app.localtype.voice-input/`
 - Models and Python runtime: `~/.local/share/localtype/`
 - Dictionary: `~/.config/localtype/dictionary.json`
+- Learned corrections and review state: `~/.config/localtype/learned_corrections.json`
 - Scenes and settings: `~/.config/localtype/`
 - Dictation history and status: `~/.local/state/localtype/`
 - Rotating pipeline diagnostics: `~/.local/state/localtype/pipeline.jsonl` (up to four 5 MiB files; audio is not stored)
