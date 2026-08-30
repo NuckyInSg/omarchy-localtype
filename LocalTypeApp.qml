@@ -3,6 +3,7 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
@@ -30,6 +31,10 @@ Item {
   property string correctionOriginalText: ""
   property bool showAdvanced: false
   property string dataError: ""
+  property string shortcutCaptureTarget: ""
+  property string shortcutCaptureHint: ""
+  property bool shortcutCaptureSaving: false
+  readonly property bool shortcutCaptureReady: shortcutInhibitor.active
 
   readonly property color foreground: Color.foreground
   readonly property color background: Color.background
@@ -48,7 +53,18 @@ Item {
     var value = String(mode === "smart"
       ? (settings.smart_shortcut || "F9")
       : (mode === "learn" ? (settings.learn_shortcut || "CTRL + SHIFT + F9") : (settings.raw_shortcut || "SHIFT + F9")))
-    return value.replace(/\s*\+\s*/g, "+").replace("SHIFT", "Shift").replace("CTRL", "Ctrl").replace("ALT", "Alt").replace("SUPER", "Super")
+    return value.replace(/mouse:272/ig, l("Mouse Left", "鼠标左键"))
+      .replace(/mouse:273/ig, l("Mouse Right", "鼠标右键"))
+      .replace(/mouse:274/ig, l("Mouse Middle", "鼠标中键"))
+      .replace(/mouse:275/ig, l("Mouse Back", "鼠标侧键 后退"))
+      .replace(/mouse:276/ig, l("Mouse Forward", "鼠标侧键 前进"))
+      .replace(/mouse:277/ig, l("Mouse Extra 3", "鼠标扩展键 3"))
+      .replace(/mouse:278/ig, l("Mouse Extra 4", "鼠标扩展键 4"))
+      .replace(/mouse:279/ig, l("Mouse Extra 5", "鼠标扩展键 5"))
+      .replace(/mouse_up/ig, l("Wheel Up", "滚轮向上"))
+      .replace(/mouse_down/ig, l("Wheel Down", "滚轮向下"))
+      .replace(/\s*\+\s*/g, "+")
+      .replace(/SHIFT/g, "Shift").replace(/CTRL/g, "Ctrl").replace(/ALT/g, "Alt").replace(/SUPER/g, "Super")
   }
   function sceneDescription(scene) {
     if (language === "zh") return String(scene.description || "")
@@ -97,19 +113,24 @@ Item {
           currentPage = requestedPage
         else if (requestedPage === "learning") currentPage = "dictionary"
         else if (requestedPage === "scenes" || requestedPage === "models") currentPage = "settings"
+        var requestedCapture = String(payload.capture || "")
+        if (["smart", "raw", "learn"].indexOf(requestedCapture) !== -1)
+          root.beginShortcutCapture(requestedCapture)
       } catch (error) { /* Ignore malformed optional launch payloads. */ }
     }
     runtimeState.refresh()
     loadDataset("settings", ["settings-show"])
     loadCurrentPage()
-    Qt.callLater(function() { appFocus.forceActiveFocus() })
+    if (shortcutCaptureTarget === "") Qt.callLater(function() { appFocus.forceActiveFocus() })
   }
   function close() {
+    cancelShortcutCapture()
     closingFromHost = true
     appWindow.visible = false
     closingFromHost = false
   }
   function requestClose() {
+    cancelShortcutCapture()
     if (shell && typeof shell.hide === "function") shell.hide("app.localtype.voice-input")
     else appWindow.visible = false
   }
@@ -238,6 +259,110 @@ Item {
     if (String(smart).trim() === "" || String(raw).trim() === "" || String(learn).trim() === "") return
     runAction(["shortcuts-set", String(smart).trim(), String(raw).trim(), String(learn).trim()], "settings")
   }
+  function beginShortcutCapture(target) {
+    if (actionProcess.running) return
+    dataError = ""
+    shortcutCaptureTarget = String(target)
+    shortcutCaptureHint = l("Preparing shortcut capture…", "正在准备快捷键捕获…")
+    Qt.callLater(function() { shortcutCaptureLayer.forceActiveFocus() })
+  }
+  function cancelShortcutCapture() {
+    if (shortcutCaptureTarget === "") return
+    shortcutCaptureTarget = ""
+    shortcutCaptureHint = ""
+    Qt.callLater(function() { appFocus.forceActiveFocus() })
+  }
+  function captureModifiers(modifiers) {
+    var names = []
+    if (modifiers & Qt.MetaModifier) names.push("SUPER")
+    if (modifiers & Qt.ControlModifier) names.push("CTRL")
+    if (modifiers & Qt.AltModifier) names.push("ALT")
+    if (modifiers & Qt.ShiftModifier) names.push("SHIFT")
+    return names
+  }
+  function captureKeyName(event) {
+    var key = event.key
+    if (key === Qt.Key_Shift || key === Qt.Key_Control || key === Qt.Key_Alt || key === Qt.Key_Meta || key === Qt.Key_AltGr) return ""
+    if (key >= Qt.Key_F1 && key <= Qt.Key_F35) return "F" + (key - Qt.Key_F1 + 1)
+    if (key >= Qt.Key_A && key <= Qt.Key_Z) return String.fromCharCode(key)
+    if (key >= Qt.Key_0 && key <= Qt.Key_9) return String.fromCharCode(key)
+    var names = ({})
+    names[Qt.Key_Space] = "SPACE"
+    names[Qt.Key_Tab] = "TAB"
+    names[Qt.Key_Backtab] = "TAB"
+    names[Qt.Key_Return] = "RETURN"
+    names[Qt.Key_Enter] = "RETURN"
+    names[Qt.Key_Backspace] = "BACKSPACE"
+    names[Qt.Key_Delete] = "DELETE"
+    names[Qt.Key_Insert] = "INSERT"
+    names[Qt.Key_Home] = "HOME"
+    names[Qt.Key_End] = "END"
+    names[Qt.Key_PageUp] = "PAGE_UP"
+    names[Qt.Key_PageDown] = "PAGE_DOWN"
+    names[Qt.Key_Left] = "LEFT"
+    names[Qt.Key_Right] = "RIGHT"
+    names[Qt.Key_Up] = "UP"
+    names[Qt.Key_Down] = "DOWN"
+    names[Qt.Key_Print] = "PRINT"
+    names[Qt.Key_Pause] = "PAUSE"
+    names[Qt.Key_CapsLock] = "CAPSLOCK"
+    names[Qt.Key_NumLock] = "NUMLOCK"
+    names[Qt.Key_ScrollLock] = "SCROLLLOCK"
+    names[Qt.Key_Minus] = "MINUS"
+    names[Qt.Key_Plus] = "PLUS"
+    names[Qt.Key_Underscore] = "UNDERSCORE"
+    names[Qt.Key_Equal] = "EQUAL"
+    names[Qt.Key_Comma] = "COMMA"
+    names[Qt.Key_Period] = "PERIOD"
+    names[Qt.Key_Slash] = "SLASH"
+    names[Qt.Key_Backslash] = "BACKSLASH"
+    names[Qt.Key_Semicolon] = "SEMICOLON"
+    names[Qt.Key_Apostrophe] = "APOSTROPHE"
+    names[Qt.Key_BracketLeft] = "BRACKETLEFT"
+    names[Qt.Key_BracketRight] = "BRACKETRIGHT"
+    names[Qt.Key_QuoteLeft] = "GRAVE"
+    names[Qt.Key_VolumeUp] = "XF86AudioRaiseVolume"
+    names[Qt.Key_VolumeDown] = "XF86AudioLowerVolume"
+    names[Qt.Key_VolumeMute] = "XF86AudioMute"
+    names[Qt.Key_MediaNext] = "XF86AudioNext"
+    names[Qt.Key_MediaPrevious] = "XF86AudioPrev"
+    names[Qt.Key_MediaPlay] = "XF86AudioPlay"
+    names[Qt.Key_MediaPause] = "XF86AudioPause"
+    names[Qt.Key_MonBrightnessUp] = "XF86MonBrightnessUp"
+    names[Qt.Key_MonBrightnessDown] = "XF86MonBrightnessDown"
+    return String(names[key] || "")
+  }
+  function captureMouseName(button) {
+    var value = Number(button)
+    if (value === Number(Qt.LeftButton)) return "mouse:272"
+    if (value === Number(Qt.RightButton)) return "mouse:273"
+    if (value === Number(Qt.MiddleButton)) return "mouse:274"
+    if (value === Number(Qt.BackButton)) return "mouse:275"
+    if (value === Number(Qt.ForwardButton)) return "mouse:276"
+    if (value === 32) return "mouse:277"
+    if (value === 64) return "mouse:278"
+    if (value === 128) return "mouse:279"
+    return ""
+  }
+  function completeShortcutCapture(keyName, modifiers) {
+    if (shortcutCaptureTarget === "" || String(keyName) === "") return
+    var parts = captureModifiers(modifiers)
+    parts.push(String(keyName))
+    var captured = parts.join(" + ")
+    var target = shortcutCaptureTarget
+    var smart = target === "smart" ? captured : String(settings.smart_shortcut || "F9")
+    var raw = target === "raw" ? captured : String(settings.raw_shortcut || "SHIFT + F9")
+    var learn = target === "learn" ? captured : String(settings.learn_shortcut || "CTRL + SHIFT + F9")
+    var next = ({})
+    for (var name in settings) next[name] = settings[name]
+    next[target + "_shortcut"] = captured
+    settings = next
+    shortcutCaptureTarget = ""
+    shortcutCaptureHint = ""
+    shortcutCaptureSaving = true
+    saveShortcuts(smart, raw, learn)
+    Qt.callLater(function() { appFocus.forceActiveFocus() })
+  }
   function editAndLearn(entry) {
     correctionHistoryId = String(entry.id || "")
     correctionOriginalText = String(entry.final_text || "")
@@ -295,6 +420,7 @@ Item {
       onStreamFinished: if (text.trim() !== "") root.dataError = text.trim()
     }
     onExited: function(exitCode, exitStatus) {
+      if (root.shortcutCaptureSaving) root.shortcutCaptureSaving = false
       runtimeState.refresh()
       if (root.refreshAfterAction === "history") root.loadDataset("history", ["history-list"])
       else if (root.refreshAfterAction === "dictionary") root.loadDataset("dictionary", ["dictionary-list"])
@@ -419,6 +545,62 @@ Item {
     }
   }
 
+  component ShortcutCaptureField: Surface {
+    required property string targetMode
+    readonly property bool capturing: root.shortcutCaptureTarget === targetMode
+    implicitHeight: 42
+    activeFocusOnTab: true
+    color: capturing ? root.alpha(root.accent, 0.14) : root.alpha(root.foreground, 0.035)
+    borderSpec: Border.flat(capturing || activeFocus ? root.accent : root.alpha(root.foreground, 0.20), capturing ? 2 : 1)
+    Keys.onPressed: function(event) {
+      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space) {
+        event.accepted = true
+        root.beginShortcutCapture(targetMode)
+      }
+    }
+
+    Row {
+      anchors.fill: parent
+      anchors.leftMargin: 14
+      anchors.rightMargin: 12
+      spacing: 10
+      BodyText {
+        width: parent.width - captureIcon.width - parent.spacing
+        anchors.verticalCenter: parent.verticalCenter
+        text: parent.parent.capturing ? root.l("Listening…", "正在监听…") : root.shortcut(parent.parent.targetMode)
+        color: parent.parent.capturing ? root.accent : root.foreground
+        font.bold: parent.parent.capturing
+        elide: Text.ElideRight
+      }
+      Text {
+        id: captureIcon
+        anchors.verticalCenter: parent.verticalCenter
+        text: parent.parent.capturing ? "󰌌" : "󰏫"
+        color: parent.parent.capturing ? root.accent : root.muted
+        font.family: root.fontFamily
+        font.pixelSize: 17
+      }
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: root.beginShortcutCapture(parent.targetMode)
+    }
+  }
+
+  ShortcutInhibitor {
+    id: shortcutInhibitor
+    enabled: root.shortcutCaptureTarget !== "" || root.shortcutCaptureSaving
+    window: appWindow
+    onActiveChanged: {
+      if (active && root.shortcutCaptureTarget !== "")
+        root.shortcutCaptureHint = root.l("Press a key combination, middle/side mouse button, or scroll the wheel", "请按下组合键、鼠标中键/侧键，或滚动滚轮")
+    }
+    onCancelled: root.cancelShortcutCapture()
+  }
+
   FloatingWindow {
     id: appWindow
     title: "LocalType"
@@ -429,6 +611,7 @@ Item {
     visible: false
 
     onVisibleChanged: {
+      if (!visible) root.cancelShortcutCapture()
       if (!visible && !root.closingFromHost && root.shell && typeof root.shell.hide === "function")
         root.shell.hide("app.localtype.voice-input")
     }
@@ -769,6 +952,110 @@ Item {
                   }
                 }
               }
+            }
+          }
+        }
+      }
+
+      Item {
+        id: shortcutCaptureLayer
+        anchors.fill: parent
+        z: 1000
+        visible: root.shortcutCaptureTarget !== ""
+        focus: visible
+        Keys.priority: Keys.BeforeItem
+        onVisibleChanged: if (visible) Qt.callLater(function() { shortcutCaptureLayer.forceActiveFocus() })
+        Keys.onPressed: function(event) {
+          event.accepted = true
+          if (event.key === Qt.Key_Escape) {
+            root.cancelShortcutCapture()
+            return
+          }
+          if (!root.shortcutCaptureReady) return
+          var keyName = root.captureKeyName(event)
+          if (keyName === "") {
+            if (event.key !== Qt.Key_Shift && event.key !== Qt.Key_Control && event.key !== Qt.Key_Alt && event.key !== Qt.Key_Meta && event.key !== Qt.Key_AltGr)
+              root.shortcutCaptureHint = root.l("That key is not supported; try another key", "暂不支持这个按键，请换一个")
+            return
+          }
+          root.completeShortcutCapture(keyName, event.modifiers)
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          color: root.alpha(root.background, 0.82)
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          acceptedButtons: Qt.AllButtons
+          onPressed: function(mouse) {
+            mouse.accepted = true
+            if (!root.shortcutCaptureReady) return
+            var keyName = root.captureMouseName(mouse.button)
+            var noModifier = root.captureModifiers(mouse.modifiers).length === 0
+            if ((mouse.button === Qt.LeftButton || mouse.button === Qt.RightButton) && noModifier) {
+              root.shortcutCaptureHint = root.l("Use a modifier with left/right click, or press a middle/side button", "鼠标左/右键请配合修饰键，或按中键/侧键")
+              return
+            }
+            if (keyName === "") {
+              root.shortcutCaptureHint = root.l("That mouse button is not supported", "暂不支持这个鼠标按键")
+              return
+            }
+            root.completeShortcutCapture(keyName, mouse.modifiers)
+          }
+          onWheel: function(wheel) {
+            wheel.accepted = true
+            if (!root.shortcutCaptureReady || wheel.angleDelta.y === 0) return
+            root.completeShortcutCapture(wheel.angleDelta.y > 0 ? "mouse_up" : "mouse_down", wheel.modifiers)
+          }
+        }
+
+        Surface {
+          width: Math.min(560, parent.width - 80)
+          height: 250
+          anchors.centerIn: parent
+          color: root.deepColor
+          borderSpec: Border.flat(root.accent, 2)
+
+          Column {
+            anchors.fill: parent
+            anchors.margins: 24
+            spacing: 16
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: "󰌌"
+              color: root.accent
+              font.family: root.fontFamily
+              font.pixelSize: 34
+            }
+            Text {
+              width: parent.width
+              text: root.l("Set shortcut", "设置快捷键")
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.heading
+              font.bold: true
+              horizontalAlignment: Text.AlignHCenter
+            }
+            MutedText {
+              width: parent.width
+              text: root.shortcutCaptureHint
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.Wrap
+            }
+            MutedText {
+              width: parent.width
+              text: root.l("Esc cancels · The shortcut is saved automatically", "Esc 取消 · 捕获后自动保存")
+              horizontalAlignment: Text.AlignHCenter
+            }
+            Button {
+              width: 160
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: root.l("Cancel", "取消")
+              bordered: true
+              foreground: root.muted
+              onClicked: root.cancelShortcutCapture()
             }
           }
         }
@@ -1666,38 +1953,30 @@ Item {
           spacing: 18
           Surface {
             width: parent.width
-            height: 280
+            height: 260
             Column {
               anchors.fill: parent
               anchors.margins: 18
               spacing: 12
               SectionLabel { text: root.l("SHORTCUTS", "快捷键") }
+              MutedText { width: parent.width; text: root.l("Click one, then press the keyboard or mouse shortcut you want.", "点击一项，然后按下想使用的键盘或鼠标快捷键。"); wrapMode: Text.Wrap }
               Row {
                 width: parent.width
                 spacing: 16
                 BodyText { width: 180; text: root.l("Smart dictation", "智能听写"); anchors.verticalCenter: parent.verticalCenter }
-                TextField { id: smartShortcutField; width: parent.width - 196; text: String(root.settings.smart_shortcut || "F9"); placeholderText: "F9"; foreground: root.foreground; accent: root.accent }
+                ShortcutCaptureField { width: parent.width - 196; targetMode: "smart" }
               }
               Row {
                 width: parent.width
                 spacing: 16
                 BodyText { width: 180; text: root.l("Verbatim dictation", "原文听写"); anchors.verticalCenter: parent.verticalCenter }
-                TextField { id: rawShortcutField; width: parent.width - 196; text: String(root.settings.raw_shortcut || "SHIFT + F9"); placeholderText: "SHIFT + F9"; foreground: root.foreground; accent: root.accent }
+                ShortcutCaptureField { width: parent.width - 196; targetMode: "raw" }
               }
               Row {
                 width: parent.width
                 spacing: 16
                 BodyText { width: 180; text: root.l("Learn correction", "纠错学习"); anchors.verticalCenter: parent.verticalCenter }
-                TextField { id: learnShortcutField; width: parent.width - 196; text: String(root.settings.learn_shortcut || "CTRL + SHIFT + F9"); placeholderText: "CTRL + SHIFT + F9"; foreground: root.foreground; accent: root.accent }
-              }
-              Button {
-                width: parent.width
-                text: root.l("Apply shortcuts", "应用快捷键")
-                iconText: "󰌌"
-                bordered: true
-                foreground: root.accent
-                accent: root.accent
-                onClicked: root.saveShortcuts(smartShortcutField.text, rawShortcutField.text, learnShortcutField.text)
+                ShortcutCaptureField { width: parent.width - 196; targetMode: "learn" }
               }
             }
           }
@@ -1780,7 +2059,7 @@ Item {
               Row { width: parent.width; MutedText { width: 220; text: root.l("Dictation history", "听写历史") } BodyText { width: parent.width - 220; text: "~/.local/state/localtype/history.json"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
               Row { width: parent.width; MutedText { width: 220; text: root.l("Acoustic memory", "声学记忆") } BodyText { width: parent.width - 220; text: "~/.local/state/localtype/acoustic-memory/"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
               Row { width: parent.width; MutedText { width: 220; text: root.l("Models and runtime", "模型与环境") } BodyText { width: parent.width - 220; text: "~/.local/share/localtype/"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
-              Row { width: parent.width; MutedText { width: 220; text: root.l("Version", "版本") } BodyText { width: parent.width - 220; text: "LocalType 0.6.0"; horizontalAlignment: Text.AlignRight } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Version", "版本") } BodyText { width: parent.width - 220; text: "LocalType 0.7.1"; horizontalAlignment: Text.AlignRight } }
             }
           }
         }
@@ -1831,16 +2110,16 @@ Item {
 
           Surface {
             width: parent.width
-            height: 254
+            height: 280
             Column {
               anchors.fill: parent
               anchors.margins: 18
               spacing: 12
               SectionLabel { text: root.l("SHORTCUTS", "快捷键") }
-              Row { width: parent.width; spacing: 16; BodyText { width: 200; text: root.l("Polished dictation", "智能润色"); anchors.verticalCenter: parent.verticalCenter } TextField { id: simpleSmartShortcutField; width: parent.width - 216; text: String(root.settings.smart_shortcut || "F9"); placeholderText: "F9"; foreground: root.foreground; accent: root.accent } }
-              Row { width: parent.width; spacing: 16; BodyText { width: 200; text: root.l("Verbatim dictation", "原文听写"); anchors.verticalCenter: parent.verticalCenter } TextField { id: simpleRawShortcutField; width: parent.width - 216; text: String(root.settings.raw_shortcut || "SHIFT + F9"); placeholderText: "SHIFT + F9"; foreground: root.foreground; accent: root.accent } }
-              Row { width: parent.width; spacing: 16; BodyText { width: 200; text: root.l("Learn correction", "纠错学习"); anchors.verticalCenter: parent.verticalCenter } TextField { id: simpleLearnShortcutField; width: parent.width - 216; text: String(root.settings.learn_shortcut || "CTRL + SHIFT + F9"); placeholderText: "CTRL + SHIFT + F9"; foreground: root.foreground; accent: root.accent } }
-              Button { width: parent.width; text: root.l("Apply shortcuts", "应用快捷键"); bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.saveShortcuts(simpleSmartShortcutField.text, simpleRawShortcutField.text, simpleLearnShortcutField.text) }
+              MutedText { width: parent.width; text: root.l("Click a shortcut, then press the next key combination, middle/side mouse button, or wheel direction. It saves automatically.", "点击快捷键后，直接按下组合键、鼠标中键/侧键或滚动方向，捕获后会自动保存。"); wrapMode: Text.Wrap }
+              Row { width: parent.width; height: 42; spacing: 16; BodyText { width: 200; text: root.l("Polished dictation", "智能润色"); anchors.verticalCenter: parent.verticalCenter } ShortcutCaptureField { width: parent.width - 216; targetMode: "smart" } }
+              Row { width: parent.width; height: 42; spacing: 16; BodyText { width: 200; text: root.l("Verbatim dictation", "原文听写"); anchors.verticalCenter: parent.verticalCenter } ShortcutCaptureField { width: parent.width - 216; targetMode: "raw" } }
+              Row { width: parent.width; height: 42; spacing: 16; BodyText { width: 200; text: root.l("Learn correction", "纠错学习"); anchors.verticalCenter: parent.verticalCenter } ShortcutCaptureField { width: parent.width - 216; targetMode: "learn" } }
             }
           }
 
@@ -1894,7 +2173,7 @@ Item {
               }
             }
           }
-          MutedText { width: parent.width; text: root.l("LocalType 0.6.0 · Audio and history stay on this device", "LocalType 0.6.0 · 音频与历史数据都留在本机"); horizontalAlignment: Text.AlignHCenter }
+          MutedText { width: parent.width; text: root.l("LocalType 0.7.1 · Audio and history stay on this device", "LocalType 0.7.1 · 音频与历史数据都留在本机"); horizontalAlignment: Text.AlignHCenter }
         }
       }
     }

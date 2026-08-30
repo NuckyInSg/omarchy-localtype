@@ -45,7 +45,7 @@ Enable **Settings → General → Learn from speech segments** for acoustic lear
 
 The app defaults to English. Select **Settings → App language → 简体中文** to switch the desktop app, bar panel, and notifications to Chinese.
 
-Edit the three shortcut fields in **Settings → Shortcuts**, then choose **Apply shortcuts**. You can also update them from the CLI:
+In **Settings → Shortcuts**, click the shortcut you want to change, then press the next key combination, middle/side mouse button, or wheel direction. The new shortcut appears and saves automatically; press `Esc` to cancel capture. You can also update all three from the CLI:
 
 ```bash
 localtypectl shortcuts-set "F9" "SHIFT + F9" "CTRL + SHIFT + F9"

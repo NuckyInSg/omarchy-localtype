@@ -163,6 +163,15 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn('else if (requestedPage === "learning") currentPage = "dictionary"', app)
         self.assertIn('Review corrections', app)
         self.assertIn('property bool showAdvanced: false', app)
+        self.assertIn('component ShortcutCaptureField: Surface', app)
+        self.assertIn('ShortcutInhibitor {', app)
+        self.assertIn('enabled: root.shortcutCaptureTarget !== "" || root.shortcutCaptureSaving', app)
+        self.assertIn('Keys.onPressed: function(event)', app)
+        self.assertIn('acceptedButtons: Qt.AllButtons', app)
+        self.assertIn('activeFocusOnTab: true', app)
+        self.assertIn('root.completeShortcutCapture', app)
+        self.assertNotIn('Apply shortcuts', app)
+        self.assertNotIn('应用快捷键', app)
 
     def test_pipeline_logs_are_readable_through_controller(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -359,8 +368,8 @@ class PluginContractTests(unittest.TestCase):
                     str(PLUGIN / "bin/localtypectl"),
                     "shortcuts-set",
                     "ctrl + space",
-                    "shift + f8",
-                    "ctrl + shift + f7",
+                    "mouse:275",
+                    "xf86audiomute",
                 ],
                 text=True,
                 capture_output=True,
@@ -369,13 +378,13 @@ class PluginContractTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             managed = bindings.read_text(encoding="utf-8")
             self.assertIn('o.bind("CTRL + SPACE"', managed)
-            self.assertIn('o.bind("SHIFT + F8"', managed)
-            self.assertIn('o.bind("CTRL + SHIFT + F7"', managed)
+            self.assertIn('o.bind("mouse:275"', managed)
+            self.assertIn('o.bind("XF86AudioMute"', managed)
             self.assertIn("learn-correction", managed)
             settings = json.loads((root / "config/settings.json").read_text(encoding="utf-8"))
             self.assertEqual(settings["smart_shortcut"], "CTRL + SPACE")
-            self.assertEqual(settings["raw_shortcut"], "SHIFT + F8")
-            self.assertEqual(settings["learn_shortcut"], "CTRL + SHIFT + F7")
+            self.assertEqual(settings["raw_shortcut"], "mouse:275")
+            self.assertEqual(settings["learn_shortcut"], "XF86AudioMute")
 
     def test_clear_correction_is_learned_and_updates_vocabulary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

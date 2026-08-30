@@ -308,8 +308,28 @@ StartupNotify=false
 def normalize_shortcut(value: str) -> str:
     shortcut = re.sub(r"\s*\+\s*", " + ", value.strip().upper())
     shortcut = re.sub(r"\s+", " ", shortcut)
-    if not shortcut or len(shortcut) > 48 or not re.fullmatch(r"[A-Z0-9 +_-]+", shortcut):
-        raise ValueError("Shortcut may only contain key names, numbers, spaces, +, _ and -")
+    shortcut = re.sub(r"\bMOUSE:(27[2-9])\b", lambda match: f"mouse:{match.group(1)}", shortcut)
+    shortcut = shortcut.replace("MOUSE_UP", "mouse_up").replace("MOUSE_DOWN", "mouse_down")
+    for upper, canonical in {
+        "XF86AUDIORAISEVOLUME": "XF86AudioRaiseVolume",
+        "XF86AUDIOLOWERVOLUME": "XF86AudioLowerVolume",
+        "XF86AUDIOMUTE": "XF86AudioMute",
+        "XF86AUDIONEXT": "XF86AudioNext",
+        "XF86AUDIOPREV": "XF86AudioPrev",
+        "XF86AUDIOPLAY": "XF86AudioPlay",
+        "XF86AUDIOPAUSE": "XF86AudioPause",
+        "XF86MONBRIGHTNESSUP": "XF86MonBrightnessUp",
+        "XF86MONBRIGHTNESSDOWN": "XF86MonBrightnessDown",
+    }.items():
+        shortcut = shortcut.replace(upper, canonical)
+    valid = re.fullmatch(
+        r"(?:[A-Z0-9_-]+ \+ )*(?:[A-Za-z0-9_-]+|mouse:27[2-9]|mouse_(?:up|down))",
+        shortcut,
+    )
+    if not shortcut or len(shortcut) > 48 or valid is None:
+        raise ValueError(
+            "Shortcut must contain key names and may end with mouse:272-279, mouse_up, or mouse_down"
+        )
     return shortcut
 
 
