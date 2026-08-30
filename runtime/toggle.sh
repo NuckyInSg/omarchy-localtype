@@ -89,13 +89,14 @@ if systemctl --user is-active --quiet "$record_unit"; then
       --duration-ms "$duration_ms"
       --processing-ms "$processing_ms"
       --injection-method "$injection_method"
+      --audio-path "$audio_file"
     )
     [[ "$polished" == "true" ]] && history_args+=(--polished)
     "$store_cmd" "${history_args[@]}"
     "$state_cmd" set idle --mode "$mode" --text "$text" --raw-text "$raw_text" \
       --duration-ms "$duration_ms" --processing-ms "$processing_ms" \
       --application-class "$focused_class" --application-title "$focused_title"
-    rm -f "$started_file"
+    rm -f "$started_file" "$audio_file"
   else
     "$state_cmd" set error --mode "$mode" --error "$(message "No speech was recognized" "没有识别到文字")"
     notify-send -u critical -a "LocalType" "$(message "No speech was recognized" "没有识别到文字")"

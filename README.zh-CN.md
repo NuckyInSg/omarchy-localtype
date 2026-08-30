@@ -34,9 +34,11 @@ localtypectl open
 
 ### 纠错学习
 
-当 LocalType 把人名、产品名或术语识别错时，先在目标应用中改正，然后选中修改后的完整句子并按 `Ctrl+Shift+F9`。LocalType 会将它与该应用最近一次听写进行比较，并把保守的词级候选放到 **词典 → 确认纠错**；只有确认后才会真正学习。
+当 LocalType 把人名、产品名或术语识别错时，先在目标应用中正常改正，然后选中修改后的完整句子并按 `Ctrl+Shift+F9`。LocalType 会与该应用最近一次听写自动对齐：单个、明确的局部纠错会直接学习；多处或有歧义的修改才会进入 **词典 → 确认纠错**。用户不需要自己编写替换规则。
 
-也可以在任意历史记录上选择“纠正并学习”，直接在 LocalType 中修改整句。确认后的纠错会保存为“识别形式 → 标准写法”，标准写法还会作为个人词汇 context 传给 Qwen3-ASR，提升后续识别。大段改写、删除、插入和纯标点变化不会被学习。
+也可以在任意历史记录上选择“纠正并学习”，直接在 LocalType 中修改整句。学到的标准写法会在下一次听写前传给 Qwen3-ASR；识别后，作用域明确或具有专名结构的精确别名会安全应用，拼音和字形近似项则由本地语言模型结合整句语义决定，避免无条件全局替换。大段改写、删除和纯标点变化不会被学习。词典也支持只添加标准词语，近似读音为可选项。
+
+在 **设置 → 常规 → 从语音片段学习** 中可开启声学学习。开启后 LocalType 在本机循环暂存最近 20 条录音；用户纠错时使用 Qwen3-ForcedAligner 定位对应字段，只长期保存该词语的小段音频与声学特征。后续听写会融合文本/拼音候选与 DTW 音频相似度；音频不会单独触发替换，同音词仍由整句语义判断。关闭开关会立即清除暂存的完整录音，但保留已确认的词语声学样本，直到删除对应纠错记录。
 
 ### 语言和快捷键
 
@@ -56,7 +58,7 @@ localtypectl shortcuts-set "F9" "SHIFT + F9" "CTRL + SHIFT + F9"
 
 - Omarchy 与 NVIDIA GPU；建议至少 6 GiB 显存
 - 可用的 CUDA 驱动和麦克风
-- 首次下载约需 5 GB 磁盘空间
+- 基础模型首次下载约需 5 GB；开启声学学习后首次纠错还会下载 Qwen3-ForcedAligner-0.6B
 - `uv`、PipeWire、`wtype`、`wl-copy`、`jq`、`curl` 和 `notify-send`
 
 已在 RTX 5070 8 GiB 上验证，两个模型常驻时约占用 4.7–5.6 GiB 显存。
@@ -100,7 +102,9 @@ omarchy plugin remove app.localtype.voice-input
 - 纠错学习与审核状态：`~/.config/localtype/learned_corrections.json`
 - 场景与设置：`~/.config/localtype/`
 - 听写历史与状态：`~/.local/state/localtype/`
-- 滚动流水线诊断日志：`~/.local/state/localtype/pipeline.jsonl`（最多四个 5 MiB 文件，不保存音频）
+- 可选的近期录音环形缓存：`~/.local/state/localtype/audio/recent/`（声学学习关闭时不保存）
+- 已确认词语的声学样本：`~/.local/state/localtype/acoustic-memory/`
+- 滚动流水线诊断日志：`~/.local/state/localtype/pipeline.jsonl`（最多四个 5 MiB 文件，日志本身不保存音频）
 - 用户服务：`~/.config/systemd/user/localtype.service`
 
 若检测到旧版 `~/.local/share/qwen3-asr/`，安装器会复用已有 Python 环境与模型缓存。
@@ -110,5 +114,7 @@ omarchy plugin remove app.localtype.voice-input
 ```bash
 ./scripts/check.sh
 ```
+
+纠错方案的竞品、论文、开源项目调研与技术取舍见 [ASR 纠错方案调研](docs/ASR_CORRECTION_RESEARCH.md)。
 
 [MIT License](LICENSE)

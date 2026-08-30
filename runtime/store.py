@@ -7,13 +7,14 @@ import argparse
 import difflib
 import json
 import os
+import shutil
 import tempfile
 import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from prompt_defaults import DEFAULT_POLISH_PROMPT
+from prompt_defaults import DEFAULT_POLISH_PROMPT, upgraded_default_prompt
 
 
 def config_home() -> Path:
@@ -111,6 +112,11 @@ DEFAULT_SETTINGS = {
     "launch_at_startup": True,
     "prewarm_models": True,
     "terminal_paste": True,
+    "auto_learn_corrections": True,
+    # Audio retention is opt-in. When enabled, only a small recent ring buffer
+    # is kept so explicit post-edits can be aligned to the original speech.
+    "acoustic_learning": False,
+    "acoustic_audio_retention": 20,
     "polish_prompt": DEFAULT_POLISH_PROMPT,
 }
 
@@ -142,6 +148,9 @@ def write_json(path: Path, value) -> None:
 
 def settings_data() -> dict:
     saved = read_json(SETTINGS_PATH, {})
+    configured_prompt = saved.get("polish_prompt")
+    if isinstance(configured_prompt, str):
+        saved["polish_prompt"] = upgraded_default_prompt(configured_prompt)
     return {**DEFAULT_SETTINGS, **saved}
 
 
@@ -173,40 +182,117 @@ def meaningful_text(value: str) -> str:
     )
 
 
+def _changed_clusters(matcher: difflib.SequenceMatcher) -> list[tuple[int, int, int, int]]:
+    """Group nearby character edits so split/case corrections stay one phrase."""
+    clusters: list[tuple[int, int, int, int]] = []
+    current: list[int] | None = None
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            if current is not None and i2 - i1 > 3 and meaningful_text(matcher.a[i1:i2]):
+                clusters.append(tuple(current))
+                current = None
+            continue
+        if current is None:
+            current = [i1, i2, j1, j2]
+        else:
+            current[1] = i2
+            current[3] = j2
+    if current is not None:
+        clusters.append(tuple(current))
+    return clusters
+
+
+def _expand_ascii_edges(value: str, start: int, end: int) -> tuple[int, int]:
+    nearby = value[max(0, start - 1) : min(len(value), end + 1)]
+    if not any(character.isascii() and character.isalnum() for character in nearby):
+        return start, end
+    while start > 0 and value[start - 1].isascii() and value[start - 1].isalnum():
+        start -= 1
+    while end < len(value) and value[end].isascii() and value[end].isalnum():
+        end += 1
+    return start, end
+
+
 def correction_candidates(original: str, corrected: str) -> list[dict]:
-    """Return conservative local replacements, never whole-sentence rewrites."""
+    """Extract local post-edits, including split-word and mixed-script changes."""
     before = original.strip()
     after = corrected.strip()
     if not before or not after or before == after:
         return []
     matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
-    if matcher.ratio() < 0.55:
+    ratio = matcher.ratio()
+    if ratio < 0.45:
         return []
+
     candidates: list[dict] = []
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag != "replace":
-            continue
+    seen: set[tuple[str, str]] = set()
+    for i1, i2, j1, j2 in _changed_clusters(matcher):
+        i1, i2 = _expand_ascii_edges(before, i1, i2)
+        j1, j2 = _expand_ascii_edges(after, j1, j2)
         spoken = before[i1:i2].strip()
         written = after[j1:j2].strip()
-        if not spoken or not written or len(spoken) > 32 or len(written) > 32:
+        identity = (spoken.casefold(), written.casefold())
+        if (
+            not spoken
+            or not written
+            or spoken == written
+            or identity in seen
+            or len(spoken) > 32
+            or len(written) > 32
+        ):
             continue
         if not meaningful_text(spoken) or not meaningful_text(written):
             continue
+        seen.add(identity)
         candidates.append(
             {
                 "spoken": spoken,
                 "written": written,
-                "confidence": round(matcher.ratio(), 3),
+                "confidence": round(ratio, 3),
+                "source_start": i1,
+                "source_end": i2,
             }
         )
     return candidates
 
 
+def auto_learnable(original: str, corrected: str, candidates: list[dict]) -> bool:
+    """Accept one explicit, well-anchored local edit without a second click."""
+    if len(candidates) != 1:
+        return False
+    candidate = candidates[0]
+    if float(candidate.get("confidence", 0)) < 0.5:
+        return False
+    spoken = meaningful_text(str(candidate.get("spoken", "")))
+    written = meaningful_text(str(candidate.get("written", "")))
+    if min(len(spoken), len(written)) < 2:
+        return False
+
+    matcher = difflib.SequenceMatcher(a=original.strip(), b=corrected.strip(), autojunk=False)
+    unchanged = sum(
+        len(meaningful_text(original.strip()[i1:i2]))
+        for tag, i1, i2, _j1, _j2 in matcher.get_opcodes()
+        if tag == "equal"
+    )
+    total = max(len(meaningful_text(original)), len(meaningful_text(corrected)), 1)
+    return unchanged >= 4 and (1.0 - unchanged / total) <= 0.6
+
+
 def corrections_entries(status: str = "") -> list[dict]:
     entries = read_json(CORRECTIONS_PATH, [])
+    acoustic_index = read_json(state_home() / "acoustic-memory" / "index.json", [])
+    sample_counts: dict[str, int] = {}
+    for sample in acoustic_index:
+        correction_id = str(sample.get("correction_id", ""))
+        if correction_id:
+            sample_counts[correction_id] = sample_counts.get(correction_id, 0) + 1
+    enriched = [
+        {**entry, "acoustic_samples": sample_counts.get(str(entry.get("id", "")), 0)}
+        for entry in entries
+    ]
     if not status or status == "all":
-        return entries
-    return [entry for entry in entries if entry.get("status") == status]
+        return enriched
+    return [entry for entry in enriched if entry.get("status") == status]
 
 
 def latest_history(application_class: str = "") -> dict | None:
@@ -247,6 +333,10 @@ def propose_corrections(args: argparse.Namespace) -> list[dict]:
 
     now = datetime.now(timezone.utc).isoformat()
     entries = read_json(CORRECTIONS_PATH, [])
+    mapping = read_json(DICTIONARY_PATH, DEFAULT_DICTIONARY)
+    auto_learn = bool(settings_data().get("auto_learn_corrections", True))
+    learn_this_edit = auto_learn and auto_learnable(original, corrected, candidates)
+    mapping_changed = False
     output: list[dict] = []
     for candidate in candidates:
         existing = next(
@@ -264,9 +354,11 @@ def propose_corrections(args: argparse.Namespace) -> list[dict]:
                 "id": uuid.uuid4().hex,
                 "spoken": candidate["spoken"],
                 "written": candidate["written"],
-                "status": "pending",
+                "status": "learned" if learn_this_edit else "pending",
                 "count": 1,
                 "confidence": candidate["confidence"],
+                "source_start": int(candidate.get("source_start", 0)),
+                "source_end": int(candidate.get("source_end", 0)),
                 "source": args.source,
                 "application_class": args.application_class
                 or str(history.get("application_class", "")),
@@ -283,11 +375,26 @@ def propose_corrections(args: argparse.Namespace) -> list[dict]:
             existing["count"] = int(existing.get("count", 1)) + 1
             existing["updated_at"] = now
             existing["corrected_text"] = corrected
+            existing["source_start"] = int(candidate.get("source_start", existing.get("source_start", 0)))
+            existing["source_end"] = int(candidate.get("source_end", existing.get("source_end", 0)))
             existing["confidence"] = max(
                 float(existing.get("confidence", 0)), candidate["confidence"]
             )
+            if (
+                auto_learn
+                and existing.get("status") == "pending"
+                and int(existing.get("count", 1)) >= 2
+                and len(meaningful_text(str(existing.get("spoken", "")))) >= 2
+                and len(meaningful_text(str(existing.get("written", "")))) >= 2
+            ):
+                existing["status"] = "learned"
+        if existing.get("status") == "learned":
+            mapping[str(existing["spoken"])] = str(existing["written"])
+            mapping_changed = True
         output.append(existing)
     write_json(CORRECTIONS_PATH, entries[:500])
+    if mapping_changed:
+        write_json(DICTIONARY_PATH, mapping)
     return output
 
 
@@ -316,6 +423,22 @@ def delete_correction(correction_id: str) -> None:
         CORRECTIONS_PATH,
         [item for item in entries if item.get("id") != correction_id],
     )
+    acoustic_index_path = state_home() / "acoustic-memory" / "index.json"
+    samples = read_json(acoustic_index_path, [])
+    retained = []
+    acoustic_root = (state_home() / "acoustic-memory").resolve()
+    for sample in samples:
+        if sample.get("correction_id") != correction_id:
+            retained.append(sample)
+            continue
+        for field in ("clip_path", "feature_path"):
+            try:
+                path = Path(str(sample.get(field, ""))).resolve()
+                if path.is_relative_to(acoustic_root):
+                    path.unlink(missing_ok=True)
+            except (OSError, RuntimeError):
+                pass
+    write_json(acoustic_index_path, retained)
 
 
 def history_entries(query: str = "") -> list[dict]:
@@ -332,34 +455,75 @@ def history_entries(query: str = "") -> list[dict]:
     ]
 
 
-def add_history(args: argparse.Namespace) -> None:
+def _remove_audio(path_value: str) -> None:
+    if not path_value:
+        return
+    try:
+        path = Path(path_value).resolve()
+        recent_home = (state_home() / "audio" / "recent").resolve()
+        if path.is_relative_to(recent_home):
+            path.unlink(missing_ok=True)
+    except (OSError, RuntimeError):
+        pass
+
+
+def prune_recent_audio(entries: list[dict], keep: int) -> None:
+    retained = 0
+    for entry in entries:
+        audio_path = str(entry.get("audio_path", ""))
+        if not audio_path:
+            continue
+        if retained < keep and Path(audio_path).is_file():
+            retained += 1
+            continue
+        _remove_audio(audio_path)
+        entry["audio_path"] = ""
+
+
+def add_history(args: argparse.Namespace) -> dict | None:
     settings = settings_data()
     if not settings.get("keep_history", True):
-        return
+        return None
     entries = read_json(HISTORY_PATH, [])
     try:
         now = datetime.fromisoformat(args.created_at) if args.created_at else datetime.now(timezone.utc)
     except ValueError:
         now = datetime.now(timezone.utc)
-    entries.insert(
-        0,
-        {
-            "id": f"{now.isoformat()}-{uuid.uuid4().hex[:6]}",
-            "created_at": now.isoformat(),
-            "mode": args.mode,
-            "application_class": args.application_class,
-            "application_title": args.application_title or args.application_class or "当前应用",
-            "scene": args.scene,
-            "raw_text": args.raw_text,
-            "final_text": args.final_text,
-            "polished": args.polished,
-            "output_status": "typed",
-            "duration_ms": args.duration_ms,
-            "processing_ms": args.processing_ms,
-            "injection_method": args.injection_method,
-        },
-    )
-    write_json(HISTORY_PATH, entries[:200])
+    history_id = f"{now.isoformat()}-{uuid.uuid4().hex[:6]}"
+    saved_audio = ""
+    source_audio = Path(str(getattr(args, "audio_path", ""))).expanduser()
+    if settings.get("acoustic_learning", False) and source_audio.is_file():
+        audio_home = state_home() / "audio" / "recent"
+        audio_home.mkdir(parents=True, exist_ok=True)
+        destination = audio_home / f"{uuid.uuid4().hex}.wav"
+        shutil.copy2(source_audio, destination)
+        destination.chmod(0o600)
+        saved_audio = str(destination)
+    entry = {
+        "id": history_id,
+        "created_at": now.isoformat(),
+        "mode": args.mode,
+        "application_class": args.application_class,
+        "application_title": args.application_title or args.application_class or "当前应用",
+        "scene": args.scene,
+        "raw_text": args.raw_text,
+        "final_text": args.final_text,
+        "polished": args.polished,
+        "output_status": "typed",
+        "duration_ms": args.duration_ms,
+        "processing_ms": args.processing_ms,
+        "injection_method": args.injection_method,
+        "audio_path": saved_audio,
+    }
+    entries.insert(0, entry)
+    discarded = entries[200:]
+    entries = entries[:200]
+    for old_entry in discarded:
+        _remove_audio(str(old_entry.get("audio_path", "")))
+    retention = max(1, min(int(settings.get("acoustic_audio_retention", 20)), 100))
+    prune_recent_audio(entries, retention if settings.get("acoustic_learning", False) else 0)
+    write_json(HISTORY_PATH, entries)
+    return entry
 
 
 def scene_by_id(scene_id: str) -> tuple[list[dict], dict | None]:
@@ -385,6 +549,7 @@ def main() -> None:
     history_add.add_argument("--processing-ms", type=int, default=0)
     history_add.add_argument("--injection-method", default="unknown")
     history_add.add_argument("--created-at", default="")
+    history_add.add_argument("--audio-path", default="")
     history_delete = subparsers.add_parser("history-delete")
     history_delete.add_argument("id")
     subparsers.add_parser("history-clear")
@@ -443,8 +608,14 @@ def main() -> None:
     elif args.command == "history-add":
         add_history(args)
     elif args.command == "history-delete":
-        write_json(HISTORY_PATH, [e for e in history_entries() if e.get("id") != args.id])
+        entries = history_entries()
+        deleted = next((entry for entry in entries if entry.get("id") == args.id), None)
+        if deleted:
+            _remove_audio(str(deleted.get("audio_path", "")))
+        write_json(HISTORY_PATH, [entry for entry in entries if entry.get("id") != args.id])
     elif args.command == "history-clear":
+        for entry in history_entries():
+            _remove_audio(str(entry.get("audio_path", "")))
         write_json(HISTORY_PATH, [])
     elif args.command == "dictionary-list":
         print(json.dumps(dictionary_entries(), ensure_ascii=False))
@@ -503,8 +674,12 @@ def main() -> None:
         print(json.dumps(settings_data(), ensure_ascii=False))
     elif args.command == "setting-set":
         settings = settings_data()
-        if args.key in {"keep_history", "launch_at_startup", "prewarm_models", "terminal_paste"}:
+        if args.key in {"keep_history", "launch_at_startup", "prewarm_models", "terminal_paste", "auto_learn_corrections", "acoustic_learning"}:
             settings[args.key] = args.value.lower() == "true"
+            if args.key == "acoustic_learning" and not settings[args.key]:
+                entries = history_entries()
+                prune_recent_audio(entries, 0)
+                write_json(HISTORY_PATH, entries)
         elif args.key == "history_days":
             settings[args.key] = max(1, int(args.value))
         elif args.key == "default_mode" and args.value in {"smart", "raw"}:

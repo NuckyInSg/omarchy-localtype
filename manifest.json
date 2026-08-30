@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "app.localtype.voice-input",
   "name": "LocalType",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "NuckyInSg",
   "license": "MIT",
   "description": "Local-first Chinese smart dictation powered by Qwen3-ASR.",

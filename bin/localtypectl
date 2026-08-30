@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +45,7 @@ DICTIONARY_DEFAULT = PLUGIN_ROOT / "config/dictionary.json"
 DICTIONARY = CONFIG_HOME / "dictionary.json"
 STATE_FILE = STATE_HOME / "status.json"
 HISTORY_FILE = STATE_HOME / "history.json"
+CORRECTIONS_FILE = CONFIG_HOME / "learned_corrections.json"
 PIPELINE_LOG = STATE_HOME / "pipeline.jsonl"
 SETTINGS_FILE = CONFIG_HOME / "settings.json"
 SERVICE_FILE = SYSTEMD_HOME / "localtype.service"
@@ -128,6 +131,57 @@ def health(timeout: float = 0.8) -> dict:
         return {}
 
 
+def read_json_list(path: Path) -> list[dict]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return [entry for entry in value if isinstance(entry, dict)] if isinstance(value, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+
+def enroll_acoustic_corrections(corrections: list[dict]) -> tuple[int, list[str]]:
+    """Ask the loaded backend to align and store audio for learned edits."""
+    if saved_settings().get("acoustic_learning") is not True:
+        return 0, []
+    histories = {
+        str(entry.get("id", "")): entry
+        for entry in read_json_list(HISTORY_FILE)
+    }
+    endpoint = f"{HEALTH_URL.rsplit('/health', 1)[0]}/acoustic/enroll"
+    learned = 0
+    errors: list[str] = []
+    for correction in corrections:
+        if correction.get("status") != "learned":
+            continue
+        history = histories.get(str(correction.get("history_id", "")))
+        audio_path = str(history.get("audio_path", "")) if history else ""
+        if not history or not audio_path or not Path(audio_path).is_file():
+            continue
+        payload = urllib.parse.urlencode(
+            {
+                "correction_id": str(correction.get("id", "")),
+                "history_id": str(history.get("id", "")),
+                "spoken": str(correction.get("spoken", "")),
+                "written": str(correction.get("written", "")),
+                "original_text": str(correction.get("original_text", history.get("final_text", ""))),
+                "raw_text": str(history.get("raw_text", "")),
+                "audio_path": audio_path,
+                "application_class": str(correction.get("application_class", history.get("application_class", ""))),
+                "source_start": int(correction.get("source_start", 0)),
+                "source_end": int(correction.get("source_end", 0)),
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(endpoint, data=payload, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                result = json.load(response)
+            if result.get("status") == "learned":
+                learned += 1
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
+            errors.append(f"{correction.get('written', '')}: {error}")
+    return learned, errors
+
+
 def gpu_status() -> dict:
     query = run([
         "nvidia-smi",
@@ -187,6 +241,7 @@ Environment={systemd_quote('CUDA_VISIBLE_DEVICES=0')}
 Environment={systemd_quote(f'LOCALTYPE_DICTIONARY={DICTIONARY}')}
 Environment={systemd_quote(f'LOCALTYPE_SETTINGS={SETTINGS_FILE}')}
 Environment={systemd_quote(f'LOCALTYPE_STATE_HOME={STATE_HOME}')}
+Environment={systemd_quote(f'LOCALTYPE_ACOUSTIC_HOME={STATE_HOME / "acoustic-memory"}')}
 ExecStart={systemd_quote(venv / 'bin/uvicorn')} server:app --host 127.0.0.1 --port 8765
 WorkingDirectory={PLUGIN_ROOT / 'runtime'}
 Restart=on-failure
@@ -391,6 +446,8 @@ def runtime_digest() -> str:
     digest = hashlib.sha256()
     for path in (
         PLUGIN_ROOT / "runtime/server.py",
+        PLUGIN_ROOT / "runtime/acoustic_memory.py",
+        PLUGIN_ROOT / "runtime/polish_guard.py",
         PLUGIN_ROOT / "runtime/prompt_defaults.py",
         PLUGIN_ROOT / "runtime/vocabulary.py",
         REQUIREMENTS,
@@ -578,6 +635,11 @@ def print_status() -> None:
         "recording_bytes": RECORDING.stat().st_size if RECORDING.exists() else 0,
         "asr_model": backend.get("asr_model", "Qwen3-ASR-1.7B"),
         "polisher_model": backend.get("polisher_model", "Qwen/Qwen3-0.6B"),
+        "forced_aligner_model": backend.get("forced_aligner_model", "Qwen3-ForcedAligner-0.6B"),
+        "forced_aligner_status": backend.get("forced_aligner_status", "not_loaded"),
+        "acoustic_learning": backend.get("acoustic_learning", saved_settings().get("acoustic_learning", False)),
+        "acoustic_templates": backend.get("acoustic_templates", 0),
+        "acoustic_memory": backend.get("acoustic_memory", str(STATE_HOME / "acoustic-memory")),
         "last_text": state.get("last_text", ""),
         "last_raw_text": state.get("last_raw_text", ""),
         "error": state.get("error", ""),
@@ -673,7 +735,30 @@ def learn_correction() -> int:
     if proposal.returncode != 0:
         notify(localized("No correction found", "没有检测到可学习纠错"), proposal.stderr.strip() or localized("Select the complete corrected sentence and try again.", "请选择修改后的完整句子，然后重试。"))
         return proposal.returncode
-    notify(localized("Correction ready to review", "纠错已等待确认"), localized("Review the detected word replacement in LocalType.", "请在 LocalType 中确认检测到的词语替换。"))
+    try:
+        proposed = json.loads(proposal.stdout)
+    except json.JSONDecodeError:
+        proposed = []
+    if proposed and all(item.get("status") == "learned" for item in proposed):
+        acoustic_count, acoustic_errors = enroll_acoustic_corrections(proposed)
+        if acoustic_count:
+            detail = localized(
+                "Text and its speech segment were added to personal memory.",
+                "文字和对应语音片段已加入个人记忆。",
+            )
+        elif acoustic_errors:
+            detail = localized(
+                "Text was learned; the acoustic sample could not be aligned.",
+                "文字已学习，但这次语音片段未能完成对齐。",
+            )
+        else:
+            detail = localized(
+                "The spelling will be biased in ASR and checked in sentence context next time.",
+                "下次会在识别阶段优先考虑，并结合整句语义校对。",
+            )
+        notify(localized("Correction learned", "已学会这次纠错"), detail)
+        return 0
+    notify(localized("Correction ready to review", "纠错已等待确认"), localized("This edit was ambiguous; review it before LocalType learns it.", "这次修改存在歧义，请确认后再学习。"))
     opened = run([str(Path(__file__).resolve()), "open", "learning"])
     return opened.returncode
 
@@ -812,6 +897,34 @@ def main() -> int:
             return 1
         print(localized("Shortcuts updated", "快捷键已更新"))
         return 0
+    if command == "correction-propose":
+        result = run([str(STORE_HELPER), *sys.argv[1:]])
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        if result.returncode == 0:
+            try:
+                proposed = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                proposed = []
+            if isinstance(proposed, list):
+                enroll_acoustic_corrections(proposed)
+        return result.returncode
+    if command == "correction-accept":
+        result = run([str(STORE_HELPER), *sys.argv[1:]])
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr)
+        if result.returncode == 0 and len(sys.argv) > 2:
+            correction = next(
+                (entry for entry in read_json_list(CORRECTIONS_FILE) if entry.get("id") == sys.argv[2]),
+                None,
+            )
+            if correction:
+                enroll_acoustic_corrections([correction])
+        return result.returncode
     store_commands = {
         "history-list",
         "history-add",
@@ -821,8 +934,6 @@ def main() -> int:
         "dictionary-set",
         "dictionary-delete",
         "corrections-list",
-        "correction-propose",
-        "correction-accept",
         "correction-ignore",
         "correction-delete",
         "scenes-list",

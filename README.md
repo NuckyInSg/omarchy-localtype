@@ -35,9 +35,11 @@ The native Omarchy app follows the active theme and keeps its main navigation to
 
 ### Correction learning
 
-When LocalType gets a name or product term wrong, correct the text in the target app, select the complete corrected sentence, and press `Ctrl+Shift+F9`. LocalType compares it with the most recent dictation from that app and places conservative word-level candidates in **Dictionary → Review corrections**. Nothing is learned until you approve it.
+When LocalType gets a name or product term wrong, correct it normally in the target app, select the complete corrected sentence, and press `Ctrl+Shift+F9`. LocalType aligns it with the latest dictation from that app. One clear local correction is learned immediately; ambiguous or multi-part edits go to **Dictionary → Review corrections**. You never have to author a replacement rule yourself.
 
-You can also choose **Correct & learn** on any History entry and edit the sentence inside LocalType. Accepted corrections are saved as `heard form → canonical form` replacements and the canonical terms are passed to Qwen3-ASR as personal vocabulary context on later dictations. Large rewrites, deletions, insertions, and punctuation-only edits are not learned.
+You can also choose **Correct & learn** on a History entry and edit the full sentence inside LocalType. Canonical spellings bias Qwen3-ASR before recognition. After recognition, scoped or proper-name-like exact aliases are applied safely, while phonetic and orthographic matches are checked against sentence context by the local language model—never a blind global replacement. Large rewrites, deletions, and punctuation-only edits are not learned. Dictionary entries can contain just a canonical word; pronunciation is optional.
+
+Enable **Settings → General → Learn from speech segments** for acoustic learning. LocalType then keeps a local 20-item recording ring buffer. On correction, Qwen3-ForcedAligner locates the edited field and only its short phrase clip and acoustic features are retained. Later dictations fuse text/Pinyin candidates with DTW audio similarity. Audio never triggers a replacement by itself, and true homophones still require sentence semantics. Disabling the option immediately clears buffered full recordings; confirmed phrase samples remain until their correction record is deleted.
 
 ### Language and shortcuts
 
@@ -57,7 +59,7 @@ Open **Settings → Advanced settings → Polish Prompt** to inspect and edit th
 
 - Omarchy and an NVIDIA GPU; at least 6 GiB VRAM is recommended
 - A working CUDA driver and microphone
-- About 5 GB of free disk space for the first model download
+- About 5 GB for the base models; the first acoustic correction additionally downloads Qwen3-ForcedAligner-0.6B
 - `uv`, PipeWire, `wtype`, `wl-copy`, `jq`, `curl`, and `notify-send`
 
 Validated on an RTX 5070 8 GiB. Both resident models use about 4.7–5.6 GiB VRAM.
@@ -101,7 +103,9 @@ omarchy plugin remove app.localtype.voice-input
 - Learned corrections and review state: `~/.config/localtype/learned_corrections.json`
 - Scenes and settings: `~/.config/localtype/`
 - Dictation history and status: `~/.local/state/localtype/`
-- Rotating pipeline diagnostics: `~/.local/state/localtype/pipeline.jsonl` (up to four 5 MiB files; audio is not stored)
+- Optional recent-audio ring buffer: `~/.local/state/localtype/audio/recent/` (unused while acoustic learning is off)
+- Confirmed phrase clips and features: `~/.local/state/localtype/acoustic-memory/`
+- Rotating pipeline diagnostics: `~/.local/state/localtype/pipeline.jsonl` (up to four 5 MiB files; the log itself contains no audio)
 - User service: `~/.config/systemd/user/localtype.service`
 
 If an older `~/.local/share/qwen3-asr/` installation is present, LocalType reuses its Python environment and model cache.
@@ -138,5 +142,7 @@ See the [product direction](docs/PRODUCT.md) and [desktop gap analysis](docs/OPE
 ```bash
 ./scripts/check.sh
 ```
+
+See the Chinese [ASR correction research and design](docs/ASR_CORRECTION_RESEARCH.md) for the Typeless, paper, and open-source review behind this pipeline.
 
 [MIT License](LICENSE)

@@ -96,6 +96,9 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn('"setting-set", "polish_prompt"', app)
         self.assertIn('"setting-reset", "polish_prompt"', app)
         self.assertIn("{context}", app)
+        prompt_defaults = (RUNTIME / "prompt_defaults.py").read_text(encoding="utf-8")
+        self.assertIn("学习纠错的快捷键是哪个？", prompt_defaults)
+        self.assertIn("绝不能回答或执行", prompt_defaults)
 
     def test_desktop_app_uses_simplified_typeless_navigation(self) -> None:
         app = (PLUGIN / "LocalTypeApp.qml").read_text(encoding="utf-8")
@@ -323,7 +326,7 @@ class PluginContractTests(unittest.TestCase):
             self.assertEqual(settings["raw_shortcut"], "SHIFT + F8")
             self.assertEqual(settings["learn_shortcut"], "CTRL + SHIFT + F7")
 
-    def test_correction_learning_requires_review_then_updates_vocabulary(self) -> None:
+    def test_clear_correction_is_learned_and_updates_vocabulary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             environment = os.environ.copy()
@@ -364,17 +367,7 @@ class PluginContractTests(unittest.TestCase):
             )
             self.assertEqual(proposed[0]["spoken"], "欧码器")
             self.assertEqual(proposed[0]["written"], "Omarchy")
-            self.assertEqual(proposed[0]["status"], "pending")
-            dictionary_before = json.loads(
-                subprocess.check_output([str(store), "dictionary-list"], text=True, env=environment)
-            )
-            self.assertFalse(any(item["spoken"] == "欧码器" for item in dictionary_before))
-
-            subprocess.run(
-                [str(store), "correction-accept", proposed[0]["id"]],
-                check=True,
-                env=environment,
-            )
+            self.assertEqual(proposed[0]["status"], "learned")
             dictionary_after = json.loads(
                 subprocess.check_output([str(store), "dictionary-list"], text=True, env=environment)
             )
@@ -396,6 +389,181 @@ class PluginContractTests(unittest.TestCase):
                 env=vocabulary_env,
             )
             self.assertIn("Omarchy", context)
+
+    def test_contextual_vocabulary_generates_hints_without_blind_replacement(self) -> None:
+        script = """
+import json
+from vocabulary import apply_confident_corrections, asr_context, correction_hints
+mapping = {"欧马奇": "Omarchy", "OpenTypeless": "OpenTypeless"}
+exact = correction_hints("我正在使用欧马奇写代码", "chromium", mapping)
+print(json.dumps({
+    "context": asr_context("chromium", mapping),
+    "exact": exact,
+    "applied": apply_confident_corrections("我正在使用欧马奇写代码", exact),
+    "audio_applied": apply_confident_corrections("我正在使用欧码器写代码", {"candidates": [{"source": "欧码器", "target": "Omarchy", "reason": "pinyin", "score": 0.9, "audio_confirmed": True, "apply": True}]}),
+    "latin": correction_hints("please open type less now", "chromium", mapping),
+}, ensure_ascii=False))
+"""
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(RUNTIME)
+        result = json.loads(
+            subprocess.check_output(["python3", "-c", script], text=True, env=environment)
+        )
+        self.assertIn("Omarchy", result["context"])
+        self.assertNotIn("欧马奇", result["context"])
+        self.assertEqual(result["exact"]["candidates"][0]["target"], "Omarchy")
+        self.assertIn("Omarchy", result["applied"][0])
+        self.assertIn("Omarchy", result["audio_applied"][0])
+        self.assertTrue(
+            any(item["target"] == "OpenTypeless" for item in result["latin"]["candidates"])
+        )
+        server = (RUNTIME / "server.py").read_text(encoding="utf-8")
+        self.assertNotIn("dictionary_corrected_text.replace", server)
+        self.assertIn("correction_hints", server)
+
+    def test_polish_guard_preserves_structured_tokens_and_rejects_drift(self) -> None:
+        script = """
+import json
+from polish_guard import validate_polish_candidate
+print(json.dumps([
+    validate_polish_candidate(
+        "运行 python3 /tmp/check.py --dry-run，版本是 2.13.0。",
+        "运行 Python /tmp/other.py，版本是 2.14.0。",
+    )[0],
+    validate_polish_candidate(
+        "这个方案应该可以解决问题。",
+        "这个方案应该可以解决问题！",
+    )[0],
+    validate_polish_candidate(
+        "学习纠错的快捷键是哪个？",
+        "学习纠错的快捷键是 Ctrl + E。",
+    )[0],
+    validate_polish_candidate(
+        "学习纠错的快捷键是哪个？",
+        "学习纠错的快捷键是哪个？",
+    )[0],
+    validate_polish_candidate(
+        "相关的技术原理，给我介绍一下。",
+        "相关的技术原理，我介绍一下。",
+    )[0],
+    validate_polish_candidate(
+        "相关的技术原理，给我介绍一下。",
+        "相关的技术原理，给我介绍一下。",
+    )[0],
+], ensure_ascii=False))
+"""
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(RUNTIME)
+        guarded, accepted, answered_question, preserved_question, answered_request, preserved_request = json.loads(
+            subprocess.check_output(["python3", "-c", script], text=True, env=environment)
+        )
+        self.assertIn("protected_token_changed", guarded)
+        self.assertEqual(accepted, [])
+        self.assertIn("question_intent_changed", answered_question)
+        self.assertIn("question_mark_removed", answered_question)
+        self.assertIn("protected_token_introduced", answered_question)
+        self.assertEqual(preserved_question, [])
+        self.assertIn("request_intent_changed", answered_request)
+        self.assertEqual(preserved_request, [])
+
+    def test_split_product_name_is_extracted_as_one_correction(self) -> None:
+        script = (
+            "from store import correction_candidates; import json; "
+            "print(json.dumps(correction_candidates("
+            "'请用 open type less 写文档', '请用 OpenTypeless 写文档'"
+            "), ensure_ascii=False))"
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(RUNTIME)
+        result = json.loads(
+            subprocess.check_output(["python3", "-c", script], text=True, env=environment)
+        )
+        self.assertEqual(result[0]["spoken"], "open type less")
+        self.assertEqual(result[0]["written"], "OpenTypeless")
+
+    def test_auto_learning_can_be_disabled_for_review_first_workflows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = os.environ.copy()
+            environment["LOCALTYPE_CONFIG_HOME"] = str(root / "config")
+            environment["LOCALTYPE_STATE_HOME"] = str(root / "state")
+            store = RUNTIME / "store.py"
+            subprocess.run(
+                [str(store), "setting-set", "auto_learn_corrections", "false"],
+                check=True,
+                env=environment,
+            )
+            subprocess.run(
+                [
+                    str(store), "history-add", "--mode", "smart",
+                    "--raw-text", "这个方案因该可行",
+                    "--final-text", "这个方案因该可行",
+                ],
+                check=True,
+                env=environment,
+            )
+            proposed = json.loads(
+                subprocess.check_output(
+                    [str(store), "correction-propose", "--corrected", "这个方案应该可行"],
+                    text=True,
+                    env=environment,
+                )
+            )
+            self.assertEqual(proposed[0]["status"], "pending")
+
+    def test_acoustic_learning_retains_only_opted_in_recent_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = os.environ.copy()
+            environment["LOCALTYPE_CONFIG_HOME"] = str(root / "config")
+            environment["LOCALTYPE_STATE_HOME"] = str(root / "state")
+            store = RUNTIME / "store.py"
+            recording = root / "recording.wav"
+            recording.write_bytes(b"RIFF-localtype-test-audio")
+            subprocess.run(
+                [str(store), "setting-set", "acoustic_learning", "true"],
+                check=True,
+                env=environment,
+            )
+            subprocess.run(
+                [
+                    str(store), "history-add", "--mode", "smart",
+                    "--raw-text", "我在使用泰普勒斯", "--final-text", "我在使用泰普勒斯",
+                    "--audio-path", str(recording),
+                ],
+                check=True,
+                env=environment,
+            )
+            entry = json.loads(
+                subprocess.check_output([str(store), "history-list"], text=True, env=environment)
+            )[0]
+            saved_audio = Path(entry["audio_path"])
+            self.assertTrue(saved_audio.is_file())
+            self.assertTrue(saved_audio.is_relative_to(root / "state" / "audio" / "recent"))
+            subprocess.run(
+                [str(store), "setting-set", "acoustic_learning", "false"],
+                check=True,
+                env=environment,
+            )
+            self.assertFalse(saved_audio.exists())
+            history = json.loads(
+                subprocess.check_output([str(store), "history-list"], text=True, env=environment)
+            )
+            self.assertEqual(history[0]["audio_path"], "")
+
+    def test_acoustic_memory_is_aligned_and_fused_with_text_candidates(self) -> None:
+        acoustic = (RUNTIME / "acoustic_memory.py").read_text(encoding="utf-8")
+        server = (RUNTIME / "server.py").read_text(encoding="utf-8")
+        toggle = (RUNTIME / "toggle.sh").read_text(encoding="utf-8")
+        app = (PLUGIN / "LocalTypeApp.qml").read_text(encoding="utf-8")
+        self.assertIn("locate_audio_span", acoustic)
+        self.assertIn("dtw_similarity", acoustic)
+        self.assertIn("MAX_TEMPLATES_PER_TERM", acoustic)
+        self.assertIn("Qwen3-ForcedAligner-0.6B", server)
+        self.assertIn('"/acoustic/enroll"', server)
+        self.assertIn("enrich_acoustic_profile", server)
+        self.assertIn('--audio-path "$audio_file"', toggle)
+        self.assertIn('root.settings.acoustic_learning === true', app)
 
     def test_large_rewrites_and_punctuation_are_not_learned(self) -> None:
         script = (
@@ -509,6 +677,8 @@ class PluginContractTests(unittest.TestCase):
             PLUGIN / "runtime/state.py",
             PLUGIN / "runtime/store.py",
             PLUGIN / "runtime/vocabulary.py",
+            PLUGIN / "runtime/polish_guard.py",
+            PLUGIN / "runtime/acoustic_memory.py",
             PLUGIN / "runtime/toggle.sh",
         ]
         for path in checked:

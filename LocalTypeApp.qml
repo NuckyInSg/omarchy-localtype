@@ -1258,8 +1258,8 @@ Item {
             anchors.fill: parent
             anchors.margins: 16
             spacing: 14
-            Column { width: (parent.width - 160) * 0.46; spacing: 6; SectionLabel { text: root.l("HEARD AS", "听到的词") } TextField { id: spokenField; width: parent.width; placeholderText: root.l("Example: oh-marky", "例如：欧马奇"); foreground: root.foreground; accent: root.accent } }
-            Column { width: (parent.width - 160) * 0.54; spacing: 6; SectionLabel { text: root.l("REPLACE WITH", "应输出的词") } TextField { id: writtenField; width: parent.width; placeholderText: root.l("Example: Omarchy", "例如：Omarchy"); foreground: root.foreground; accent: root.accent } }
+            Column { width: (parent.width - 160) * 0.54; spacing: 6; SectionLabel { text: root.l("WORD OR PHRASE", "词语或短语") } TextField { id: writtenField; width: parent.width; placeholderText: root.l("Example: Omarchy", "例如：Omarchy"); foreground: root.foreground; accent: root.accent } }
+            Column { width: (parent.width - 160) * 0.46; spacing: 6; SectionLabel { text: root.l("SOUNDS LIKE · OPTIONAL", "近似读音 · 可选") } TextField { id: spokenField; width: parent.width; placeholderText: root.l("Example: oh-marky", "例如：欧马奇"); foreground: root.foreground; accent: root.accent } }
             Button {
               width: 132
               anchors.bottom: parent.bottom
@@ -1270,8 +1270,9 @@ Item {
               accent: root.accent
               verticalPadding: 11
               onClicked: {
-                if (spokenField.text.trim() === "" || writtenField.text.trim() === "") return
-                root.runAction(["dictionary-set", spokenField.text.trim(), writtenField.text.trim()], "dictionary")
+                if (writtenField.text.trim() === "") return
+                var alias = spokenField.text.trim() === "" ? writtenField.text.trim() : spokenField.text.trim()
+                root.runAction(["dictionary-set", alias, writtenField.text.trim()], "dictionary")
                 spokenField.text = ""
                 writtenField.text = ""
               }
@@ -1326,8 +1327,8 @@ Item {
             Row {
               width: parent.width
               height: 44
-              SectionLabel { width: parent.width * 0.34; text: root.l("HEARD AS", "听到的词") }
-              SectionLabel { width: parent.width * 0.46; text: root.l("REPLACE WITH", "应输出的词") }
+              SectionLabel { width: parent.width * 0.46; text: root.l("WORD OR PHRASE", "词语或短语") }
+              SectionLabel { width: parent.width * 0.34; text: root.l("PRONUNCIATION / SOURCE", "读音 / 来源") }
               SectionLabel { width: parent.width * 0.20; text: root.l("ACTION", "操作") }
             }
             Rectangle { width: parent.width; height: 1; color: root.alpha(root.foreground, 0.14) }
@@ -1347,8 +1348,8 @@ Item {
                     Row {
                       anchors.fill: parent
                       anchors.leftMargin: 10
-                      BodyText { width: parent.width * 0.34; anchors.verticalCenter: parent.verticalCenter; text: String(parent.parent.modelData.spoken || "") }
                       BodyText { width: parent.width * 0.46; anchors.verticalCenter: parent.verticalCenter; text: String(parent.parent.modelData.written || ""); color: root.accent }
+                      BodyText { width: parent.width * 0.34; anchors.verticalCenter: parent.verticalCenter; text: String(parent.parent.modelData.spoken || "") === String(parent.parent.modelData.written || "") ? root.l("Vocabulary", "词汇") : String(parent.parent.modelData.spoken || "") }
                       Button {
                         width: 88; anchors.verticalCenter: parent.verticalCenter; text: root.l("Delete", "删除"); iconText: "󰩺"; bordered: true; foreground: root.muted
                         onClicked: root.runAction(["dictionary-delete", String(parent.parent.parent.modelData.spoken)], "dictionary")
@@ -1391,7 +1392,7 @@ Item {
               anchors.verticalCenter: parent.verticalCenter
               spacing: 6
               BodyText { text: root.l("Select a complete corrected sentence, then press " + root.shortcut("learn") + ".", "选中修改后的完整句子，然后按 " + root.shortcut("learn") + "。"); font.pixelSize: Style.font.subtitle; font.bold: true }
-              MutedText { text: root.l("LocalType extracts only local word replacements. Nothing is learned until you approve it here.", "LocalType 只提取局部词语替换；在这里确认前不会学习任何内容。") }
+              MutedText { text: root.l("Clear local edits can learn automatically; ambiguous edits stay here for review. Acoustic learning also saves the aligned phrase audio.", "明确的局部修改可自动学习；有歧义的修改会留在这里确认。开启声学学习后还会保存对齐后的词语音频。") }
             }
           }
         }
@@ -1424,7 +1425,8 @@ Item {
                     SectionLabel { text: correctionCard.modelData.status === "pending" ? root.l("PENDING", "待确认") : (correctionCard.modelData.status === "learned" ? root.l("LEARNED", "已学习") : root.l("IGNORED", "已忽略")); color: correctionCard.modelData.status === "pending" ? root.accent : root.muted }
                     MutedText { text: String(correctionCard.modelData.application_title || correctionCard.modelData.application_class || root.l("Unknown app", "未知应用")) }
                     MutedText { text: root.l("Seen ", "出现 ") + Number(correctionCard.modelData.count || 1) + root.l("×", " 次") }
-                    Item { width: Math.max(1, parent.width - 570); height: 1 }
+                    MutedText { visible: Number(correctionCard.modelData.acoustic_samples || 0) > 0; text: "󰑋 " + Number(correctionCard.modelData.acoustic_samples || 0) + root.l(" voice sample", " 个语音样本") }
+                    Item { width: Math.max(1, parent.width - (Number(correctionCard.modelData.acoustic_samples || 0) > 0 ? 710 : 570)); height: 1 }
                     Button { visible: correctionCard.modelData.status === "pending"; width: 92; text: root.l("Ignore", "忽略"); bordered: true; foreground: root.muted; onClicked: root.runAction(["correction-ignore", String(correctionCard.modelData.id)], "corrections") }
                     Button { visible: correctionCard.modelData.status === "pending"; width: 104; text: root.l("Learn", "学习"); iconText: "󰆓"; bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.runAction(["correction-accept", String(correctionCard.modelData.id)], "corrections") }
                     Button { visible: correctionCard.modelData.status !== "pending"; width: 92; text: root.l("Delete", "删除"); iconText: "󰩺"; bordered: true; foreground: root.muted; onClicked: root.runAction(["correction-delete", String(correctionCard.modelData.id)], "corrections") }
@@ -1753,7 +1755,7 @@ Item {
           }
           Surface {
             width: parent.width
-            height: 338
+            height: 402
             Column {
               anchors.fill: parent
               anchors.margins: 18
@@ -1761,7 +1763,8 @@ Item {
               SectionLabel { text: root.l("LANGUAGE, DICTATION & PRIVACY", "语言、听写与隐私") }
               Dropdown { width: parent.width; label: root.l("App language", "应用语言"); value: String(root.settings.language || "en"); options: [{ value: "en", label: "English" }, { value: "zh", label: "简体中文" }]; foreground: root.foreground; accent: root.accent; onChanged: function(value) { root.settingSet("language", value) } }
               Dropdown { width: parent.width; label: root.l("Default dictation mode", "默认听写模式"); value: String(root.settings.default_mode || "smart"); options: [{ value: "smart", label: root.l("Smart dictation", "智能听写") }, { value: "raw", label: root.l("Verbatim dictation", "原文听写") }]; foreground: root.foreground; accent: root.accent; onChanged: function(value) { root.settingSet("default_mode", value) } }
-              LabeledToggle { label: root.l("Save text history", "保存文字历史"); detail: root.l("Stores text and metadata only, never WAV audio", "只保存文字和元数据，不保存 WAV 音频"); checked: root.settings.keep_history !== false; onToggled: root.settingSet("keep_history", checked) }
+              LabeledToggle { label: root.l("Save text history", "保存文字历史"); detail: root.l("Text and metadata stay on this device", "文字与元数据只保存在本机"); checked: root.settings.keep_history !== false; onToggled: root.settingSet("keep_history", checked) }
+              LabeledToggle { label: root.l("Learn from speech segments", "从语音片段学习"); detail: root.l("Keeps a 20-item local audio buffer and saves only corrected phrase samples", "在本机暂存最近 20 条录音，并长期保留纠错词的语音片段"); checked: root.settings.acoustic_learning === true; onToggled: root.settingSet("acoustic_learning", checked) }
               LabeledToggle { label: root.l("Paste terminal input as one block", "终端使用整段粘贴"); detail: root.l("Prevents Codex and other TUIs from splitting one sentence", "避免 Codex 等 TUI 把一句话拆成多次提交"); checked: root.settings.terminal_paste !== false; onToggled: root.settingSet("terminal_paste", checked) }
             }
           }
@@ -1775,8 +1778,9 @@ Item {
               SectionLabel { text: root.l("LOCAL DATA", "本地数据") }
               Row { width: parent.width; MutedText { width: 220; text: root.l("Personal dictionary", "个人词典") } BodyText { width: parent.width - 220; text: "~/.config/localtype/dictionary.json"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
               Row { width: parent.width; MutedText { width: 220; text: root.l("Dictation history", "听写历史") } BodyText { width: parent.width - 220; text: "~/.local/state/localtype/history.json"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Acoustic memory", "声学记忆") } BodyText { width: parent.width - 220; text: "~/.local/state/localtype/acoustic-memory/"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
               Row { width: parent.width; MutedText { width: 220; text: root.l("Models and runtime", "模型与环境") } BodyText { width: parent.width - 220; text: "~/.local/share/localtype/"; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft } }
-              Row { width: parent.width; MutedText { width: 220; text: root.l("Version", "版本") } BodyText { width: parent.width - 220; text: "LocalType 0.5.0"; horizontalAlignment: Text.AlignRight } }
+              Row { width: parent.width; MutedText { width: 220; text: root.l("Version", "版本") } BodyText { width: parent.width - 220; text: "LocalType 0.6.0"; horizontalAlignment: Text.AlignRight } }
             }
           }
         }
@@ -1810,7 +1814,7 @@ Item {
 
           Surface {
             width: parent.width
-            height: 300
+            height: 422
             Column {
               anchors.fill: parent
               anchors.margins: 18
@@ -1818,7 +1822,9 @@ Item {
               SectionLabel { text: root.l("GENERAL", "常规") }
               Dropdown { width: parent.width; label: root.l("App language", "应用语言"); value: String(root.settings.language || "en"); options: [{ value: "en", label: "English" }, { value: "zh", label: "简体中文" }]; foreground: root.foreground; accent: root.accent; onChanged: function(value) { root.settingSet("language", value) } }
               Dropdown { width: parent.width; label: root.l("Default dictation mode", "默认听写模式"); value: String(root.settings.default_mode || "smart"); options: [{ value: "smart", label: root.l("Polished", "智能润色") }, { value: "raw", label: root.l("Verbatim", "原文听写") }]; foreground: root.foreground; accent: root.accent; onChanged: function(value) { root.settingSet("default_mode", value) } }
-              LabeledToggle { label: root.l("Save text history", "保存文字历史"); detail: root.l("Text stays on this device; audio is never stored", "文字只保存在本机，录音不会保存"); checked: root.settings.keep_history !== false; onToggled: root.settingSet("keep_history", checked) }
+              LabeledToggle { label: root.l("Save text history", "保存文字历史"); detail: root.l("Text and metadata stay on this device", "文字与元数据只保存在本机"); checked: root.settings.keep_history !== false; onToggled: root.settingSet("keep_history", checked) }
+              LabeledToggle { label: root.l("Learn from speech segments", "从语音片段学习"); detail: root.l("Keeps a 20-item local audio buffer and saves only corrected phrase samples", "在本机暂存最近 20 条录音，并长期保留纠错词的语音片段"); checked: root.settings.acoustic_learning === true; onToggled: root.settingSet("acoustic_learning", checked) }
+              LabeledToggle { label: root.l("Learn clear corrections automatically", "自动学习明确的纠错"); detail: root.l("Ambiguous or large edits still wait for review", "有歧义或改动较大的内容仍需确认"); checked: root.settings.auto_learn_corrections !== false; onToggled: root.settingSet("auto_learn_corrections", checked) }
               LabeledToggle { label: root.l("Paste terminal input as one block", "终端使用整段粘贴"); detail: root.l("Prevents terminal apps from splitting one sentence", "避免终端应用把一句话拆成多段"); checked: root.settings.terminal_paste !== false; onToggled: root.settingSet("terminal_paste", checked) }
             }
           }
@@ -1888,7 +1894,7 @@ Item {
               }
             }
           }
-          MutedText { width: parent.width; text: root.l("LocalType 0.5.0 · Audio and history stay on this device", "LocalType 0.5.0 · 音频与历史数据都留在本机"); horizontalAlignment: Text.AlignHCenter }
+          MutedText { width: parent.width; text: root.l("LocalType 0.6.0 · Audio and history stay on this device", "LocalType 0.6.0 · 音频与历史数据都留在本机"); horizontalAlignment: Text.AlignHCenter }
         }
       }
     }
@@ -1915,7 +1921,7 @@ Item {
       anchors.margins: 22
       spacing: 14
       TitleText { text: root.l("Correct & learn", "纠正并学习"); font.pixelSize: Style.font.heading }
-      MutedText { width: parent.width; text: root.l("Edit the complete sentence. LocalType will detect local word replacements and ask you to approve them.", "编辑完整句子，LocalType 会检测局部词语替换并让你确认。") ; wrapMode: Text.Wrap }
+      MutedText { width: parent.width; text: root.l("Edit the complete sentence. Clear local corrections are learned now; ambiguous edits wait for review.", "编辑完整句子。明确的局部纠错会立即学习，有歧义的修改仍会等待确认。") ; wrapMode: Text.Wrap }
       TextArea {
         id: correctionText
         width: parent.width
@@ -1932,7 +1938,7 @@ Item {
         width: parent.width
         spacing: 12
         Button { width: (parent.width - parent.spacing) / 2; text: root.l("Cancel", "取消"); bordered: true; foreground: root.foreground; onClicked: correctionEditor.close() }
-        Button { width: (parent.width - parent.spacing) / 2; text: root.l("Find corrections", "检测纠错"); iconText: "󰛨"; bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.proposeHistoryCorrection() }
+        Button { width: (parent.width - parent.spacing) / 2; text: root.l("Learn correction", "学习纠错"); iconText: "󰛨"; bordered: true; foreground: root.accent; accent: root.accent; onClicked: root.proposeHistoryCorrection() }
       }
     }
   }
