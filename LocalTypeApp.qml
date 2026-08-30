@@ -588,7 +588,7 @@ Item {
                       Rectangle { width: 9; height: 9; radius: 5; color: runtimeState.backendReady ? "#adda78" : root.urgent; anchors.verticalCenter: parent.verticalCenter }
                       BodyText { text: root.l("Local · Private", "本地 · 私密") }
                     }
-                    Row { spacing: 10; Text { text: "󰧑"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: 16 } BodyText { text: String(runtimeState.record.asr_model || "Qwen3-ASR-1.7B") } }
+                    Row { spacing: 10; Text { text: "󰧑"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: 16 } BodyText { text: String(runtimeState.record.asr_model || "Qwen3-ASR-1.7B") + (runtimeState.record.streaming_ready === true ? " · vLLM · Live" : "") } }
                     Row { spacing: 10; Text { text: "󰚩"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: 16 } BodyText { text: String(runtimeState.record.polisher_model || "Qwen3-0.6B").replace("Qwen/", "") } }
                     Row { spacing: 10; Text { text: "󰢮"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: 16 } BodyText { text: String(runtimeState.gpu.name || "GPU").replace("NVIDIA GeForce ", "").replace(" Laptop GPU", "") } }
                     StatusMeter { width: parent.width; value: root.gpuRatio(); meterColor: root.accent }
@@ -1575,7 +1575,7 @@ Item {
 
         Repeater {
           model: [
-            { label: root.l("SPEECH", "语音识别"), name: String(runtimeState.record.asr_model || "Qwen3-ASR-1.7B"), detail: root.l("Chinese · CUDA · BF16", "中文 · CUDA · BF16"), description: root.l("Accuracy-first Mandarin and Chinese dialect recognition", "准确率优先，支持普通话与多种中文方言"), memory: Math.max(0, Number(runtimeState.gpu.memory_used_mib || 0) - 700), latency: Number(runtimeState.record.processing_ms || 860) / 1000 },
+            { label: root.l("SPEECH", "语音识别"), name: String(runtimeState.record.asr_model || "Qwen3-ASR-1.7B"), detail: runtimeState.record.streaming_ready === true ? root.l("Chinese · vLLM · Streaming", "中文 · vLLM · 流式") : root.l("Chinese · CUDA · BF16", "中文 · CUDA · BF16"), description: root.l("Accuracy-first Mandarin and Chinese dialect recognition", "准确率优先，支持普通话与多种中文方言"), memory: Math.max(0, Number(runtimeState.gpu.memory_used_mib || 0) - 700), latency: Number(runtimeState.record.processing_ms || 860) / 1000 },
             { label: root.l("POLISH", "智能润色"), name: String(runtimeState.record.polisher_model || "Qwen3-0.6B").replace("Qwen/", ""), detail: root.l("Local · CUDA · BF16", "本地 · CUDA · BF16"), description: root.l("Corrects wording and punctuation while preserving names", "修正错字、标点与语气，保留专有名词"), memory: 700, latency: 0.21 }
           ]
           delegate: Surface {

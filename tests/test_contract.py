@@ -132,6 +132,9 @@ class PluginContractTests(unittest.TestCase):
         self.assertNotIn("Smart dictation started", toggle)
         self.assertNotIn("Transcribing locally", toggle)
         self.assertIn("app.localtype.voice-input.overlay", toggle)
+        self.assertIn('stream_recorder="$script_dir/record_stream.py"', toggle)
+        self.assertIn("/stream/cancel", toggle)
+        self.assertEqual(toggle.count('"${health_url%/health}/transcribe"'), 1)
 
     def test_polisher_is_prompt_driven_and_prompt_is_editable_in_app(self) -> None:
         server = (RUNTIME / "server.py").read_text(encoding="utf-8")
@@ -707,6 +710,25 @@ print(json.dumps([
         self.assertIn("size = { 1400, 980 }", controller)
         self.assertIn("localtype.desktop", controller)
         self.assertIn('"open"', controller)
+        self.assertIn("LOCALTYPE_ASR_BACKEND", controller)
+        self.assertIn("LOCALTYPE_VLLM_MAX_BATCHED_TOKENS", controller)
+
+    def test_streaming_api_keeps_preview_separate_from_final_transcription(self) -> None:
+        server = (RUNTIME / "server.py").read_text(encoding="utf-8")
+        recorder = (RUNTIME / "record_stream.py").read_text(encoding="utf-8")
+        requirements = (PLUGIN / "requirements.txt").read_text(encoding="utf-8")
+        self.assertIn('@app.post("/stream/start")', server)
+        self.assertIn('@app.post("/stream/chunk")', server)
+        self.assertIn('@app.post("/stream/cancel")', server)
+        self.assertIn("StreamingSessionRegistry", server)
+        self.assertIn('streaming_sessions.start(\n            context=""', server)
+        self.assertIn("partial-text", recorder)
+        self.assertIn("PUSH_SAMPLES = SAMPLE_RATE // 2", recorder)
+        self.assertIn('"/stream/cancel"', recorder)
+        self.assertIn("recorder.returncode not in (None, 0) else 1", recorder)
+        self.assertTrue(os.access(RUNTIME / "record_stream.py", os.X_OK))
+        self.assertIn("vllm==0.14.0", requirements)
+        self.assertIn("torch==2.9.1", requirements)
 
     def test_bootstrap_runs_non_blocking_runtime_setup(self) -> None:
         bootstrap = (PLUGIN / "Service.qml").read_text(encoding="utf-8")
@@ -727,6 +749,8 @@ print(json.dumps([
             PLUGIN / "runtime/vocabulary.py",
             PLUGIN / "runtime/polish_guard.py",
             PLUGIN / "runtime/acoustic_memory.py",
+            PLUGIN / "runtime/record_stream.py",
+            PLUGIN / "runtime/streaming_sessions.py",
             PLUGIN / "runtime/toggle.sh",
         ]
         for path in checked:

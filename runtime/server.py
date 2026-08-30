@@ -21,10 +21,11 @@ from acoustic_memory import (
     slice_audio,
     template_count,
 )
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, Header, HTTPException, UploadFile
 from polish_guard import validate_polish_candidate
 from prompt_defaults import DEFAULT_POLISH_PROMPT, upgraded_default_prompt
 from qwen_asr import Qwen3ASRModel, Qwen3ForcedAligner
+from streaming_sessions import StreamingSessionRegistry
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vocabulary import (
     apply_confident_corrections,
@@ -35,12 +36,54 @@ from vocabulary import (
 
 
 app = FastAPI()
-model = Qwen3ASRModel.from_pretrained(
-    "Qwen/Qwen3-ASR-1.7B",
-    dtype=torch.bfloat16,
-    device_map="cuda:0",
-    max_inference_batch_size=1,
-    max_new_tokens=512,
+ASR_MODEL_NAME = "Qwen/Qwen3-ASR-1.7B"
+ASR_BACKEND_REQUESTED = os.environ.get("LOCALTYPE_ASR_BACKEND", "transformers").strip().lower()
+ASR_BACKEND_ERROR = ""
+
+
+def load_asr_model() -> Qwen3ASRModel:
+    global ASR_BACKEND_ERROR
+    if ASR_BACKEND_REQUESTED == "vllm":
+        try:
+            return Qwen3ASRModel.LLM(
+                model=ASR_MODEL_NAME,
+                gpu_memory_utilization=float(
+                    os.environ.get("LOCALTYPE_VLLM_GPU_MEMORY_UTILIZATION", "0.62")
+                ),
+                max_model_len=int(os.environ.get("LOCALTYPE_VLLM_MAX_MODEL_LEN", "4096")),
+                max_num_seqs=1,
+                max_num_batched_tokens=int(
+                    os.environ.get("LOCALTYPE_VLLM_MAX_BATCHED_TOKENS", "512")
+                ),
+                max_inference_batch_size=1,
+                max_new_tokens=256,
+                enforce_eager=True,
+            )
+        except Exception as error:
+            ASR_BACKEND_ERROR = f"{type(error).__name__}: {error}"
+            raise RuntimeError(
+                "LOCALTYPE_ASR_BACKEND=vllm was requested but could not be initialized: "
+                + ASR_BACKEND_ERROR
+            ) from error
+    if ASR_BACKEND_REQUESTED != "transformers":
+        raise RuntimeError(
+            f"unsupported LOCALTYPE_ASR_BACKEND={ASR_BACKEND_REQUESTED!r}"
+        )
+    return Qwen3ASRModel.from_pretrained(
+        ASR_MODEL_NAME,
+        dtype=torch.bfloat16,
+        device_map="cuda:0",
+        max_inference_batch_size=1,
+        max_new_tokens=512,
+    )
+
+
+model = load_asr_model()
+streaming_sessions = StreamingSessionRegistry(
+    model,
+    ttl_seconds=float(os.environ.get("LOCALTYPE_STREAM_TTL_SECONDS", "600")),
+    max_sessions=int(os.environ.get("LOCALTYPE_STREAM_MAX_SESSIONS", "2")),
+    max_audio_seconds=float(os.environ.get("LOCALTYPE_STREAM_MAX_AUDIO_SECONDS", "300")),
 )
 polisher_name = "Qwen/Qwen3-0.6B"
 polisher_tokenizer = AutoTokenizer.from_pretrained(polisher_name)
@@ -50,6 +93,20 @@ polisher_model = AutoModelForCausalLM.from_pretrained(
     device_map="cuda:0",
 )
 inference_lock = threading.Lock()
+streaming_warmup_ms = 0
+if model.backend == "vllm" and os.environ.get("LOCALTYPE_STREAM_WARMUP", "1") != "0":
+    warmup_started = time.perf_counter()
+    with inference_lock, torch.inference_mode():
+        warmup_state = model.init_streaming_state(
+            context="",
+            language="Chinese",
+            unfixed_chunk_num=4,
+            unfixed_token_num=5,
+            chunk_size_sec=1.0,
+        )
+        model.streaming_transcribe(np.zeros(16000, dtype=np.float32), warmup_state)
+    del warmup_state
+    streaming_warmup_ms = round((time.perf_counter() - warmup_started) * 1000)
 forced_aligner = None
 forced_aligner_status = "not_loaded"
 forced_aligner_error = ""
@@ -110,10 +167,9 @@ def get_forced_aligner():
     forced_aligner_status = "loading"
     forced_aligner_error = ""
     try:
-        # Keep at least ~2 GiB of headroom for long ASR utterances and polishing.
-        # On smaller GPUs the aligner lives on CPU; it runs only when enrolling
-        # or validating a candidate, so stability is more important than peak
-        # alignment speed.
+        # The tuned vLLM ASR plus polisher leaves under 1 GiB free on an 8 GiB
+        # GPU. Keep the on-demand aligner on CPU there; enrollment latency is
+        # preferable to destabilizing normal dictation.
         total_vram = (
             torch.cuda.get_device_properties(0).total_memory
             if torch.cuda.is_available()
@@ -250,6 +306,131 @@ def polisher_messages(
 def write_pipeline_log(payload: dict) -> None:
     event = {"timestamp_ms": round(time.time() * 1000), **payload}
     pipeline_logger.info(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
+
+
+def decode_streaming_pcm(payload: bytes, content_type: str) -> np.ndarray:
+    media_type = str(content_type or "").lower().split(";", 1)[0].strip()
+    if media_type in {"audio/l16", "application/x-pcm"}:
+        if len(payload) % 2:
+            raise ValueError("signed 16-bit PCM payload length must be divisible by 2")
+        return np.frombuffer(payload, dtype="<i2").astype(np.float32) / 32768.0
+    if media_type == "application/octet-stream":
+        if len(payload) % 4:
+            raise ValueError("float32 PCM payload length must be divisible by 4")
+        return np.frombuffer(payload, dtype="<f4").astype(np.float32, copy=False)
+    raise ValueError(
+        "stream chunks must use audio/L16, application/x-pcm, or application/octet-stream"
+    )
+
+
+@app.post("/stream/start")
+def stream_start(context: str = Form("general")):
+    if not streaming_sessions.available:
+        raise HTTPException(
+            status_code=409,
+            detail="streaming requires the LocalType vLLM ASR backend",
+        )
+    started = time.perf_counter()
+    try:
+        # Qwen's streaming context behaves like preceding transcript text. A
+        # glossary-style ASR prompt can be echoed during silence and contaminate
+        # the preview, so vocabulary bias is reserved for the independent final
+        # full-WAV pass below.
+        session = streaming_sessions.start(
+            context="",
+            language="Chinese",
+            unfixed_chunk_num=int(os.environ.get("LOCALTYPE_STREAM_UNFIXED_CHUNKS", "4")),
+            unfixed_token_num=int(os.environ.get("LOCALTYPE_STREAM_UNFIXED_TOKENS", "5")),
+            chunk_size_sec=float(os.environ.get("LOCALTYPE_STREAM_CHUNK_SECONDS", "1.0")),
+        )
+        response = {
+            "session_id": session.session_id,
+            "backend": model.backend,
+            "chunk_size_sec": session.state.chunk_size_sec,
+            "unfixed_chunk_num": session.state.unfixed_chunk_num,
+            "unfixed_token_num": session.state.unfixed_token_num,
+        }
+        write_pipeline_log(
+            {
+                "event": "stream_start",
+                "session_id": session.session_id[:12],
+                "context": context,
+                "total_ms": round((time.perf_counter() - started) * 1000),
+            }
+        )
+        return response
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/stream/chunk")
+def stream_chunk(
+    session_id: str,
+    audio: bytes = Body(..., media_type="application/octet-stream"),
+    content_type: str = Header("application/octet-stream"),
+):
+    if len(audio) > 4 * 16000 * 4:
+        raise HTTPException(status_code=413, detail="streaming chunk exceeds four seconds")
+    try:
+        samples = decode_streaming_pcm(audio, content_type)
+        with inference_lock, torch.inference_mode():
+            response = streaming_sessions.push(session_id, samples)
+        write_pipeline_log(
+            {
+                "event": "stream_chunk",
+                "session_id": session_id[:12],
+                "sequence": response["sequence"],
+                "audio_ms": response["audio_ms"],
+                "decode_ms": response["decode_ms"],
+                "text_characters": len(response["text"]),
+                "revision_start": response["revision_start"],
+            }
+        )
+        return response
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/stream/finish")
+def stream_finish(session_id: str = Form(...)):
+    try:
+        with inference_lock, torch.inference_mode():
+            response = streaming_sessions.finish(session_id)
+        write_pipeline_log(
+            {
+                "event": "stream_finish",
+                "session_id": session_id[:12],
+                "sequence": response["sequence"],
+                "audio_ms": response["audio_ms"],
+                "decode_ms": response["decode_ms"],
+                "text_characters": len(response["text"]),
+            }
+        )
+        return response
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/stream/cancel")
+def stream_cancel(session_id: str = Form(...)):
+    cancelled = streaming_sessions.cancel(session_id)
+    write_pipeline_log(
+        {
+            "event": "stream_cancel",
+            "session_id": session_id[:12],
+            "cancelled": cancelled,
+        }
+    )
+    return {"status": "cancelled" if cancelled else "not_found"}
+
+
+@app.get("/stream/status")
+def stream_status():
+    return {"backend": model.backend, **streaming_sessions.status()}
 
 
 def enrich_acoustic_profile(
@@ -499,6 +680,12 @@ def health():
     return {
         "status": "ready",
         "asr_model": "Qwen3-ASR-1.7B",
+        "asr_backend": model.backend,
+        "asr_backend_requested": ASR_BACKEND_REQUESTED,
+        "asr_backend_error": ASR_BACKEND_ERROR,
+        "streaming_ready": streaming_sessions.available,
+        "streaming_sessions": streaming_sessions.status()["active_sessions"],
+        "streaming_warmup_ms": streaming_warmup_ms,
         "polisher_model": polisher_name,
         "forced_aligner_model": "Qwen3-ForcedAligner-0.6B",
         "forced_aligner_status": forced_aligner_status,

@@ -22,7 +22,7 @@ omarchy plugin add https://github.com/NuckyInSg/omarchy-localtype.git --enable
 | `Shift+F9` | 开始或停止原文听写 |
 | `Ctrl+Shift+F9` | 从选中的修改后整句中学习纠错 |
 
-插件只输入文字，不会代替你按回车、发送消息或执行终端命令。听写时，参考 Typeless 设计的胶囊浮层会显示在当前屏幕底部居中，提供取消、完成和波形反馈；停止后收缩为本地处理状态。常规的开始、处理和完成通知已由该浮层替代，只有错误仍使用桌面通知。浮层不抢占键盘焦点，且只有控制胶囊会接收鼠标事件；上方蓝色文字卡片已接好临时流式文本状态，临时结果不会进入历史或学习数据。终端应用通过一次整段粘贴避免 Codex 等 TUI 拆分文本；Chromium 系浏览器则通过一次剪贴板粘贴避免丢失首个虚拟按键字符。
+插件只输入文字，不会代替你按回车、发送消息或执行终端命令。听写时，参考 Typeless 设计的胶囊浮层会显示在当前屏幕底部居中，提供取消、完成和波形反馈。Qwen3-ASR 通过 vLLM 接收本地 500 ms 音频块并更新上方蓝色文字卡片；未稳定的句尾可能随后续语音回滚修正。停止后临时文字立即丢弃，胶囊收缩为本地处理状态；LocalType 再对完整 WAV 独立执行一次最终 ASR、声学纠错和 Polish，最终结果只提交一次。流式文字不会进入历史或学习数据。常规进度通知已由浮层替代，只有错误仍使用桌面通知。浮层不抢占键盘焦点，且只有控制胶囊会接收鼠标事件。终端应用通过一次整段粘贴避免 Codex 等 TUI 拆分文本；Chromium 系浏览器则通过一次剪贴板粘贴避免丢失首个虚拟按键字符。
 
 从 Omarchy 应用启动器、状态栏面板或命令行打开桌面应用：
 
@@ -56,12 +56,12 @@ localtypectl shortcuts-set "F9" "SHIFT + F9" "CTRL + SHIFT + F9"
 
 ## 系统要求
 
-- Omarchy 与 NVIDIA GPU；建议至少 6 GiB 显存
+- Omarchy 与 NVIDIA GPU；vLLM 流式识别建议 8 GiB 显存
 - 可用的 CUDA 驱动和麦克风
-- 基础模型首次下载约需 5 GB；开启声学学习后首次纠错还会下载 Qwen3-ForcedAligner-0.6B
+- Python/vLLM 环境与基础模型合计约需 16 GB；开启声学学习后首次纠错还会下载约 2 GB 的 Qwen3-ForcedAligner-0.6B
 - `uv`、PipeWire、`wtype`、`wl-copy`、`jq`、`curl` 和 `notify-send`
 
-已在 RTX 5070 8 GiB 上验证，两个模型常驻时约占用 4.7–5.6 GiB 显存。
+已在 RTX 5070 8 GiB 上验证：调优后的 vLLM ASR 与常驻润色模型从启动到持续推理约占用 6.4–7.2 GiB 显存，实测余量约 0.9 GiB。服务会在报告就绪前完成首次流式解码预热。
 
 ## 管理命令
 

@@ -23,7 +23,7 @@ The plugin installs its runtime, models, user-level systemd service, desktop lau
 | `Shift+F9` | Start or stop verbatim dictation |
 | `Ctrl+Shift+F9` | Learn a correction from the selected corrected sentence |
 
-LocalType types text but never presses Enter, sends a message, or executes a terminal command. While dictating, a Typeless-inspired capsule stays at the bottom center of the focused display, with cancel/finish controls and a waveform; it contracts to a local-processing indicator after you stop. Routine start, processing, and completion notifications are replaced by this surface; errors still use a desktop notification. The overlay never takes keyboard focus and only its control capsule intercepts pointer input. Its blue transcript card is wired for ephemeral streaming text, which is never committed to history or learning. Terminal apps receive one bracketed-paste event so TUIs such as Codex do not split it; Chromium-based browsers use one clipboard paste to avoid dropping the first virtual character.
+LocalType types text but never presses Enter, sends a message, or executes a terminal command. While dictating, a Typeless-inspired capsule stays at the bottom center of the focused display, with cancel/finish controls and a waveform. Qwen3-ASR runs through vLLM and updates the blue transcript card from local 500 ms audio blocks; the unstable suffix may be revised as more speech arrives. When you stop, the preview is discarded and the capsule contracts to a local-processing indicator. LocalType then performs one independent full-WAV ASR pass, acoustic correction, and Polish pass before committing the result exactly once. Streaming text never enters history or learning. Routine progress notifications are replaced by this surface; errors still use a desktop notification. The overlay never takes keyboard focus and only its control capsule intercepts pointer input. Terminal apps receive one bracketed-paste event so TUIs such as Codex do not split it; Chromium-based browsers use one clipboard paste to avoid dropping the first virtual character.
 
 Open the desktop app from the Omarchy launcher, the bar panel, or the CLI:
 
@@ -57,12 +57,12 @@ Open **Settings → Advanced settings → Polish Prompt** to inspect and edit th
 
 ## Requirements
 
-- Omarchy and an NVIDIA GPU; at least 6 GiB VRAM is recommended
+- Omarchy and an NVIDIA GPU; 8 GiB VRAM is recommended for vLLM streaming
 - A working CUDA driver and microphone
-- About 5 GB for the base models; the first acoustic correction additionally downloads Qwen3-ForcedAligner-0.6B
+- About 16 GB for the Python/vLLM runtime and base models; the first acoustic correction additionally downloads about 2 GB for Qwen3-ForcedAligner-0.6B
 - `uv`, PipeWire, `wtype`, `wl-copy`, `jq`, `curl`, and `notify-send`
 
-Validated on an RTX 5070 8 GiB. Both resident models use about 4.7–5.6 GiB VRAM.
+Validated on an RTX 5070 8 GiB. The tuned vLLM ASR engine plus resident polisher use about 6.4–7.2 GiB VRAM from startup through sustained inference, leaving about 0.9 GiB of measured headroom. The service warms the first streaming decode before reporting ready.
 
 ## Management
 
@@ -117,17 +117,22 @@ sequenceDiagram
     actor U as User
     participant H as Hyprland
     participant R as LocalType recorder
-    participant A as Qwen3-ASR
+    participant A as Qwen3-ASR / vLLM
+    participant O as Bottom overlay
     participant L as Qwen3-0.6B
     participant T as Active app
 
     U->>H: Press the configured shortcut
     H->>R: Start PipeWire recording
+    loop While speaking
+        R->>A: Local 500 ms PCM block
+        A-->>O: Revisable partial transcript
+    end
     U->>H: Press the shortcut again
-    H->>R: Stop and submit WAV
-    R->>A: Local speech recognition
-    A-->>L: Raw transcript + app context
-    L-->>R: Conservatively polished text
+    H->>R: Stop and finalize WAV
+    R->>A: Independent full-WAV recognition
+    A-->>L: Final raw transcript + app context
+    L-->>R: One conservative Polish pass
     alt Regular app
         R->>T: wtype input
     else Terminal or Codex

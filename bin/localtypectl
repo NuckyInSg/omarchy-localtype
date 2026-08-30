@@ -50,6 +50,7 @@ PIPELINE_LOG = STATE_HOME / "pipeline.jsonl"
 SETTINGS_FILE = CONFIG_HOME / "settings.json"
 SERVICE_FILE = SYSTEMD_HOME / "localtype.service"
 RECORDING = RUNTIME_HOME / "recording.wav"
+STREAM_SESSION = RUNTIME_HOME / "stream-session"
 LOCK_FILE = RUNTIME_HOME / "install.lock"
 SERVICE = "localtype.service"
 RECORD_SERVICE = "localtype-record.service"
@@ -228,7 +229,13 @@ def systemd_quote(value: Path | str) -> str:
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def python_module_installed(venv: Path, module: str) -> bool:
+    site_packages = venv / "lib" / "python3.12" / "site-packages"
+    return (site_packages / module).exists() or any(site_packages.glob(f"{module}-*.dist-info"))
+
+
 def service_contents(venv: Path, hf_home: Path) -> str:
+    asr_backend = "vllm" if python_module_installed(venv, "vllm") else "transformers"
     return f"""[Unit]
 Description=LocalType local smart dictation engine
 After=graphical-session.target network-online.target
@@ -238,6 +245,12 @@ PartOf=graphical-session.target
 Type=simple
 Environment={systemd_quote(f'HF_HOME={hf_home}')}
 Environment={systemd_quote('CUDA_VISIBLE_DEVICES=0')}
+Environment={systemd_quote(f'LOCALTYPE_ASR_BACKEND={asr_backend}')}
+Environment={systemd_quote('LOCALTYPE_VLLM_GPU_MEMORY_UTILIZATION=0.62')}
+Environment={systemd_quote('LOCALTYPE_VLLM_MAX_MODEL_LEN=4096')}
+Environment={systemd_quote('LOCALTYPE_VLLM_MAX_BATCHED_TOKENS=512')}
+Environment={systemd_quote('VLLM_WORKER_MULTIPROC_METHOD=spawn')}
+Environment={systemd_quote('VLLM_LOGGING_LEVEL=WARNING')}
 Environment={systemd_quote(f'LOCALTYPE_DICTIONARY={DICTIONARY}')}
 Environment={systemd_quote(f'LOCALTYPE_SETTINGS={SETTINGS_FILE}')}
 Environment={systemd_quote(f'LOCALTYPE_STATE_HOME={STATE_HOME}')}
@@ -446,6 +459,7 @@ def runtime_digest() -> str:
     digest = hashlib.sha256()
     for path in (
         PLUGIN_ROOT / "runtime/server.py",
+        PLUGIN_ROOT / "runtime/streaming_sessions.py",
         PLUGIN_ROOT / "runtime/acoustic_memory.py",
         PLUGIN_ROOT / "runtime/polish_guard.py",
         PLUGIN_ROOT / "runtime/prompt_defaults.py",
@@ -636,6 +650,12 @@ def print_status() -> None:
         "recording": recording,
         "recording_bytes": RECORDING.stat().st_size if RECORDING.exists() else 0,
         "asr_model": backend.get("asr_model", "Qwen3-ASR-1.7B"),
+        "asr_backend": backend.get("asr_backend", "transformers"),
+        "asr_backend_requested": backend.get("asr_backend_requested", "transformers"),
+        "asr_backend_error": backend.get("asr_backend_error", ""),
+        "streaming_ready": backend.get("streaming_ready", False),
+        "streaming_sessions": backend.get("streaming_sessions", 0),
+        "streaming_warmup_ms": backend.get("streaming_warmup_ms", 0),
         "polisher_model": backend.get("polisher_model", "Qwen/Qwen3-0.6B"),
         "forced_aligner_model": backend.get("forced_aligner_model", "Qwen3-ForcedAligner-0.6B"),
         "forced_aligner_status": backend.get("forced_aligner_status", "not_loaded"),
@@ -703,6 +723,26 @@ def notify(title: str, body: str) -> None:
 def refresh_overlay() -> None:
     if command_exists("omarchy-shell"):
         run(["omarchy-shell", "-q", "app.localtype.voice-input.overlay", "refresh"])
+
+
+def cancel_stream_session() -> None:
+    try:
+        session_id = STREAM_SESSION.read_text(encoding="utf-8").strip()
+    except OSError:
+        session_id = ""
+    try:
+        STREAM_SESSION.unlink()
+    except FileNotFoundError:
+        pass
+    if not session_id:
+        return
+    endpoint = f"{HEALTH_URL.rsplit('/health', 1)[0]}/stream/cancel"
+    payload = urllib.parse.urlencode({"session_id": session_id}).encode("utf-8")
+    request = urllib.request.Request(endpoint, data=payload, method="POST")
+    try:
+        urllib.request.urlopen(request, timeout=3).close()
+    except (urllib.error.URLError, TimeoutError, OSError):
+        pass
 
 
 def active_window() -> tuple[str, str]:
@@ -804,6 +844,7 @@ def doctor() -> int:
         "runtime": selected_venv().joinpath("bin/python").exists(),
         "service": bool(status["service_active"]),
         "backend": bool(status["backend_ready"]),
+        "streaming": bool(status.get("streaming_ready")),
         "gpu": bool(status["gpu"].get("available")),
         "bindings": HYPR_BINDINGS.exists() and BINDINGS_START in HYPR_BINDINGS.read_text(encoding="utf-8"),
     }
@@ -873,6 +914,7 @@ def main() -> int:
         return subprocess.call([str(TOGGLE), mode])
     if command == "cancel":
         run(["systemctl", "--user", "stop", RECORD_SERVICE])
+        cancel_stream_session()
         try:
             RECORDING.unlink()
         except FileNotFoundError:

@@ -5,12 +5,14 @@ runtime_dir="${LOCALTYPE_RUNTIME_HOME:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/lo
 audio_file="$runtime_dir/recording.wav"
 mode_file="$runtime_dir/mode"
 started_file="$runtime_dir/started_at_ms"
+stream_session_file="$runtime_dir/stream-session"
 record_unit="localtype-record.service"
 requested_mode="${1:-smart}"
 health_url="${LOCALTYPE_HEALTH_URL:-http://127.0.0.1:8765/health}"
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 state_cmd="$script_dir/state.py"
 store_cmd="$script_dir/store.py"
+stream_recorder="$script_dir/record_stream.py"
 settings_json=$($store_cmd settings-show 2>/dev/null || printf '{}')
 language=$(jq -r '.language // "en"' <<<"$settings_json")
 message() {
@@ -19,6 +21,15 @@ message() {
 refresh_overlay() {
   command -v omarchy-shell >/dev/null 2>&1 || return 0
   omarchy-shell -q app.localtype.voice-input.overlay refresh >/dev/null 2>&1 || true
+}
+cancel_stream() {
+  local session_id
+  session_id=$(cat "$stream_session_file" 2>/dev/null || true)
+  rm -f "$stream_session_file"
+  [[ -n "$session_id" ]] || return 0
+  curl --fail --silent --max-time 3 \
+    --data-urlencode "session_id=$session_id" \
+    "${health_url%/health}/stream/cancel" >/dev/null 2>&1 || true
 }
 mkdir -p "$runtime_dir"
 
@@ -31,6 +42,7 @@ trap record_failure ERR
 
 if systemctl --user is-active --quiet "$record_unit"; then
   systemctl --user stop "$record_unit"
+  cancel_stream
   mode=$(cat "$mode_file" 2>/dev/null || printf 'smart')
   "$state_cmd" set processing --mode "$mode"
   refresh_overlay
@@ -107,11 +119,19 @@ else
     exit 1
   fi
 
-  rm -f "$audio_file"
+  rm -f "$audio_file" "$stream_session_file"
   printf '%s' "$requested_mode" > "$mode_file"
   date +%s%3N > "$started_file"
+  focused_window=$(hyprctl activewindow -j)
+  focused_class=$(jq -r '.class // ""' <<<"$focused_window")
   systemd-run --user --quiet --collect --unit="$record_unit" \
-    /usr/bin/pw-record --rate 16000 --channels 1 --format s16 "$audio_file"
+    /usr/bin/python3 "$stream_recorder" \
+    --output "$audio_file" \
+    --mode "$requested_mode" \
+    --context "$focused_class" \
+    --health-url "$health_url" \
+    --state-command "$state_cmd" \
+    --session-file "$stream_session_file"
   "$state_cmd" set recording --mode "$requested_mode"
   refresh_overlay
 fi
