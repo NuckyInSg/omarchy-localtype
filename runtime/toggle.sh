@@ -13,13 +13,12 @@ state_cmd="$script_dir/state.py"
 store_cmd="$script_dir/store.py"
 settings_json=$($store_cmd settings-show 2>/dev/null || printf '{}')
 language=$(jq -r '.language // "en"' <<<"$settings_json")
-smart_shortcut=$(jq -r '.smart_shortcut // "F9"' <<<"$settings_json")
-raw_shortcut=$(jq -r '.raw_shortcut // "SHIFT + F9"' <<<"$settings_json")
-display_shortcut() {
-  sed -E 's/[[:space:]]*\+[[:space:]]*/+/g; s/SHIFT/Shift/g; s/CTRL/Ctrl/g; s/ALT/Alt/g; s/SUPER/Super/g' <<<"$1"
-}
 message() {
   if [[ "$language" == "zh" ]]; then printf '%s' "$2"; else printf '%s' "$1"; fi
+}
+refresh_overlay() {
+  command -v omarchy-shell >/dev/null 2>&1 || return 0
+  omarchy-shell -q app.localtype.voice-input.overlay refresh >/dev/null 2>&1 || true
 }
 mkdir -p "$runtime_dir"
 
@@ -32,9 +31,9 @@ trap record_failure ERR
 
 if systemctl --user is-active --quiet "$record_unit"; then
   systemctl --user stop "$record_unit"
-  notify-send -a "LocalType" "$(message "Transcribing locally…" "正在识别…")"
   mode=$(cat "$mode_file" 2>/dev/null || printf 'smart')
   "$state_cmd" set processing --mode "$mode"
+  refresh_overlay
   focused_window=$(hyprctl activewindow -j)
   focused_class=$(jq -r '.class // ""' <<<"$focused_window")
   focused_title=$(jq -r '.title // ""' <<<"$focused_window")
@@ -78,7 +77,6 @@ if systemctl --user is-active --quiet "$record_unit"; then
       wtype -- "$text"
       injection_method="wtype"
     fi
-    notify-send -a "LocalType" "$text"
     history_args=(
       history-add --mode "$mode"
       --application-class "$focused_class"
@@ -96,9 +94,11 @@ if systemctl --user is-active --quiet "$record_unit"; then
     "$state_cmd" set idle --mode "$mode" --text "$text" --raw-text "$raw_text" \
       --duration-ms "$duration_ms" --processing-ms "$processing_ms" \
       --application-class "$focused_class" --application-title "$focused_title"
+    refresh_overlay
     rm -f "$started_file" "$audio_file"
   else
     "$state_cmd" set error --mode "$mode" --error "$(message "No speech was recognized" "没有识别到文字")"
+    refresh_overlay
     notify-send -u critical -a "LocalType" "$(message "No speech was recognized" "没有识别到文字")"
   fi
 else
@@ -113,9 +113,5 @@ else
   systemd-run --user --quiet --collect --unit="$record_unit" \
     /usr/bin/pw-record --rate 16000 --channels 1 --format s16 "$audio_file"
   "$state_cmd" set recording --mode "$requested_mode"
-  if [[ "$requested_mode" == "smart" ]]; then
-    notify-send -a "LocalType" "$(message "Smart dictation started. Press $(display_shortcut "$smart_shortcut") again to stop." "开始智能听写，再按 $(display_shortcut "$smart_shortcut") 结束")"
-  else
-    notify-send -a "LocalType" "$(message "Verbatim dictation started. Press $(display_shortcut "$raw_shortcut") again to stop." "开始原文听写，再按 $(display_shortcut "$raw_shortcut") 结束")"
-  fi
+  refresh_overlay
 fi

@@ -60,6 +60,7 @@ def main() -> None:
     update.add_argument("--mode", choices=("smart", "raw"))
     update.add_argument("--text")
     update.add_argument("--raw-text")
+    update.add_argument("--partial-text")
     update.add_argument("--error")
     update.add_argument("--detail")
     update.add_argument("--duration-ms", type=int)
@@ -81,6 +82,7 @@ def main() -> None:
     if args.action == "clear":
         state.pop("last_text", None)
         state.pop("last_raw_text", None)
+        state.pop("partial_text", None)
         state.pop("error", None)
         write_state(state)
         return
@@ -92,6 +94,10 @@ def main() -> None:
         state["last_text"] = args.text
     if args.raw_text is not None:
         state["last_raw_text"] = args.raw_text
+    if args.status == "recording" and args.partial_text is not None:
+        state["partial_text"] = args.partial_text
+    else:
+        state.pop("partial_text", None)
     if args.error is not None:
         state["error"] = args.error
     elif args.status != "error":

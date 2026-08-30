@@ -27,6 +27,18 @@ class PluginContractTests(unittest.TestCase):
         self.assertEqual(manifest["entryPoints"]["barWidget"], "Panel.qml")
         self.assertEqual(manifest["entryPoints"]["panel"], "LocalTypeApp.qml")
 
+    def test_service_exposes_bottom_center_dictation_overlay(self) -> None:
+        service = (PLUGIN / "Service.qml").read_text(encoding="utf-8")
+        overlay = (PLUGIN / "DictationOverlay.qml").read_text(encoding="utf-8")
+        self.assertIn("DictationOverlay", service)
+        self.assertIn('statusCommand: "overlay-status"', service)
+        self.assertIn("anchors.horizontalCenter: parent.horizontalCenter", overlay)
+        self.assertIn("anchors.bottom: parent.bottom", overlay)
+        self.assertIn("partial_text", overlay)
+        self.assertIn('runtimeState.runAction(["cancel"])', overlay)
+        self.assertIn('runtimeState.runAction(["toggle"', overlay)
+        self.assertIn("mask: Region { item: controlCapsule }", overlay)
+
     def test_status_fixture_round_trips_as_json(self) -> None:
         fixture = {
             "phase": "idle",
@@ -77,6 +89,39 @@ class PluginContractTests(unittest.TestCase):
         self.assertEqual(state["last_text"], "本地听写测试")
         self.assertIn("updated_at", state)
 
+    def test_partial_transcript_is_recording_only_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            environment = os.environ.copy()
+            environment["XDG_STATE_HOME"] = directory
+            subprocess.run(
+                [
+                    str(RUNTIME / "state.py"),
+                    "set",
+                    "recording",
+                    "--partial-text",
+                    "正在实时识别",
+                ],
+                check=True,
+                env=environment,
+            )
+            recording = json.loads(
+                subprocess.check_output(
+                    [str(RUNTIME / "state.py"), "show"], text=True, env=environment
+                )
+            )
+            self.assertEqual(recording["partial_text"], "正在实时识别")
+            subprocess.run(
+                [str(RUNTIME / "state.py"), "set", "processing"],
+                check=True,
+                env=environment,
+            )
+            processing = json.loads(
+                subprocess.check_output(
+                    [str(RUNTIME / "state.py"), "show"], text=True, env=environment
+                )
+            )
+            self.assertNotIn("partial_text", processing)
+
     def test_terminal_input_never_presses_enter(self) -> None:
         toggle = (RUNTIME / "toggle.sh").read_text(encoding="utf-8")
         normalized = toggle.lower()
@@ -84,6 +129,9 @@ class PluginContractTests(unittest.TestCase):
         self.assertNotIn("-k return", normalized)
         self.assertIn("wl-copy", toggle)
         self.assertIn("-k v", toggle)
+        self.assertNotIn("Smart dictation started", toggle)
+        self.assertNotIn("Transcribing locally", toggle)
+        self.assertIn("app.localtype.voice-input.overlay", toggle)
 
     def test_polisher_is_prompt_driven_and_prompt_is_editable_in_app(self) -> None:
         server = (RUNTIME / "server.py").read_text(encoding="utf-8")

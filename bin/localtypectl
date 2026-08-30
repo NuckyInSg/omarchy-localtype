@@ -627,7 +627,9 @@ def print_status() -> None:
     output = {
         "phase": phase,
         "mode": state.get("mode", "smart"),
+        "language": language(),
         "detail": state.get("detail", ""),
+        "partial_text": state.get("partial_text", ""),
         "service_active": service_active or legacy_active,
         "service_name": SERVICE if service_active else (LEGACY_SERVICE if legacy_active else ""),
         "backend_ready": backend.get("status") == "ready",
@@ -654,6 +656,32 @@ def print_status() -> None:
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
 
 
+def print_overlay_status() -> None:
+    """Return only latency-sensitive state needed by the dictation overlay."""
+    state = saved_state()
+    recording = unit_active(RECORD_SERVICE)
+    service_active = unit_active(SERVICE) or unit_active(LEGACY_SERVICE)
+    phase = str(state.get("status", "idle"))
+    if recording:
+        phase = "recording"
+    elif phase == "recording":
+        phase = "idle"
+    if not service_active and phase not in ("error", "installing"):
+        phase = "offline"
+    output = {
+        "phase": phase,
+        "mode": state.get("mode", "smart"),
+        "language": language(),
+        "detail": state.get("detail", ""),
+        "partial_text": state.get("partial_text", ""),
+        "service_active": service_active,
+        "backend_ready": service_active,
+        "recording": recording,
+        "error": state.get("error", ""),
+    }
+    print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
+
+
 def print_pipeline_logs(limit: int) -> None:
     try:
         lines = PIPELINE_LOG.read_text(encoding="utf-8").splitlines()
@@ -670,6 +698,11 @@ def print_pipeline_logs(limit: int) -> None:
 
 def notify(title: str, body: str) -> None:
     subprocess.Popen(["notify-send", "-a", "LocalType", title, body])
+
+
+def refresh_overlay() -> None:
+    if command_exists("omarchy-shell"):
+        run(["omarchy-shell", "-q", "app.localtype.voice-input.overlay", "refresh"])
 
 
 def active_window() -> tuple[str, str]:
@@ -804,6 +837,9 @@ def main() -> int:
     if command == "status":
         print_status()
         return 0
+    if command == "overlay-status":
+        print_overlay_status()
+        return 0
     if command == "open":
         if not command_exists("omarchy-shell"):
             print("omarchy-shell is not available", file=sys.stderr)
@@ -842,7 +878,7 @@ def main() -> int:
         except FileNotFoundError:
             pass
         set_state("idle", detail="Recording cancelled")
-        notify(localized("Recording cancelled", "录音已取消"), localized("No text was entered", "没有输入任何文字"))
+        refresh_overlay()
         return 0
     if command in ("start", "stop", "restart"):
         if command in ("start", "restart") and not SERVICE_FILE.exists():

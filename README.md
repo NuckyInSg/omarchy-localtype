@@ -23,7 +23,7 @@ The plugin installs its runtime, models, user-level systemd service, desktop lau
 | `Shift+F9` | Start or stop verbatim dictation |
 | `Ctrl+Shift+F9` | Learn a correction from the selected corrected sentence |
 
-LocalType types text but never presses Enter, sends a message, or executes a terminal command. Terminal apps receive one bracketed-paste event so TUIs such as Codex do not split it; Chromium-based browsers use one clipboard paste to avoid dropping the first virtual character.
+LocalType types text but never presses Enter, sends a message, or executes a terminal command. While dictating, a Typeless-inspired capsule stays at the bottom center of the focused display, with cancel/finish controls and a waveform; it contracts to a local-processing indicator after you stop. Routine start, processing, and completion notifications are replaced by this surface; errors still use a desktop notification. The overlay never takes keyboard focus and only its control capsule intercepts pointer input. Its blue transcript card is wired for ephemeral streaming text, which is never committed to history or learning. Terminal apps receive one bracketed-paste event so TUIs such as Codex do not split it; Chromium-based browsers use one clipboard paste to avoid dropping the first virtual character.
 
 Open the desktop app from the Omarchy launcher, the bar panel, or the CLI:
 

@@ -6,6 +6,7 @@ Item {
   visible: false
 
   required property string ctlPath
+  property string statusCommand: "status"
   property int refreshInterval: 3000
   property var record: ({})
   property string actionError: ""
@@ -46,7 +47,7 @@ Item {
   Process {
     id: statusProcess
     running: false
-    command: [root.ctlPath, "status"]
+    command: [root.ctlPath, root.statusCommand]
 
     stdout: StdioCollector {
       waitForEnd: true
