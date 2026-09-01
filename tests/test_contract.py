@@ -37,7 +37,15 @@ class PluginContractTests(unittest.TestCase):
         self.assertIn("partial_text", overlay)
         self.assertIn('runtimeState.runAction(["cancel"])', overlay)
         self.assertIn('runtimeState.runAction(["toggle"', overlay)
-        self.assertIn("mask: Region { item: controlCapsule }", overlay)
+        self.assertIn("root.runtimeState.reviewing ? overlayColumn : controlCapsule", overlay)
+        self.assertIn("TextEdit {", overlay)
+        self.assertIn('["review-commit", String(text)]', overlay)
+        self.assertIn('WlrKeyboardFocus.Exclusive', overlay)
+        self.assertIn('sequence: "Escape"', overlay)
+        self.assertIn('sequence: "Return"', overlay)
+        self.assertIn('!transcriptEditor.activeFocus', overlay)
+        self.assertIn('property bool submitting: false', overlay)
+        self.assertIn('function onActionFinished() {\n      root.submitting = false', overlay)
 
     def test_status_fixture_round_trips_as_json(self) -> None:
         fixture = {
@@ -127,8 +135,11 @@ class PluginContractTests(unittest.TestCase):
         normalized = toggle.lower()
         self.assertNotIn("-k enter", normalized)
         self.assertNotIn("-k return", normalized)
-        self.assertIn("wl-copy", toggle)
-        self.assertIn("-k v", toggle)
+        controller = (PLUGIN / "bin/localtypectl").read_text(encoding="utf-8")
+        self.assertIn('["wl-copy"],', controller)
+        self.assertIn("stdout=subprocess.DEVNULL", controller)
+        self.assertIn('"-k", "v"', controller)
+        self.assertIn('set reviewing', toggle)
         self.assertNotIn("Smart dictation started", toggle)
         self.assertNotIn("Transcribing locally", toggle)
         self.assertIn("app.localtype.voice-input.overlay", toggle)
@@ -192,6 +203,15 @@ class PluginContractTests(unittest.TestCase):
         self.assertEqual(entries[0]["event"], "transcribe")
         self.assertEqual(entries[0]["decision"], "accepted_polisher_candidate")
 
+    def test_review_commit_releases_overlay_before_paste_and_never_blocks_on_audio_learning(self) -> None:
+        controller = (PLUGIN / "bin/localtypectl").read_text(encoding="utf-8")
+        commit = controller.split("def review_commit", 1)[1].split("def learn_correction", 1)[0]
+        self.assertIn('set_review_state(review, "idle")', commit)
+        self.assertNotIn('set_review_state(review, "processing")', commit)
+        self.assertNotIn("enroll_acoustic_corrections", commit)
+        self.assertIn("subprocess.TimeoutExpired", commit)
+        self.assertIn("hl.dispatch(hl.dsp.focus", commit)
+
     def test_toggle_script_record_and_terminal_paste_flow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -236,6 +256,14 @@ class PluginContractTests(unittest.TestCase):
             environment["FAKE_RECORDING"] = "1"
             subprocess.run([str(RUNTIME / "toggle.sh"), "smart"], check=True, env=environment)
 
+            reviewing = json.loads((state_home / "localtype/status.json").read_text(encoding="utf-8"))
+            self.assertEqual(reviewing["status"], "reviewing")
+            self.assertFalse((root / "clipboard.txt").exists())
+            subprocess.run(
+                [str(PLUGIN / "bin/localtypectl"), "review-commit", "测试结果"],
+                check=True,
+                env=environment,
+            )
             finished = json.loads((state_home / "localtype/status.json").read_text(encoding="utf-8"))
             self.assertEqual(finished["status"], "idle")
             self.assertEqual(finished["last_text"], "测试结果")
@@ -250,13 +278,18 @@ class PluginContractTests(unittest.TestCase):
             audio.write_bytes(b"RIFF-test")
             environment["FAKE_RECORDING"] = "1"
             subprocess.run([str(RUNTIME / "toggle.sh"), "smart"], check=True, env=environment)
+            subprocess.run(
+                [str(PLUGIN / "bin/localtypectl"), "review-commit", "测试结果"],
+                check=True,
+                env=environment,
+            )
             calls = log.read_text(encoding="utf-8")
             self.assertIn("-M ctrl -k v -m ctrl", calls)
             browser_history = json.loads(
                 (state_home / "localtype/history.json").read_text(encoding="utf-8")
             )
             self.assertEqual(browser_history[0]["application_class"], "chromium")
-            self.assertEqual(browser_history[0]["injection_method"], "clipboard_browser")
+            self.assertEqual(browser_history[0]["injection_method"], "review_clipboard")
 
     def test_dictionary_is_valid_string_mapping(self) -> None:
         dictionary = json.loads((PLUGIN / "config/dictionary.json").read_text(encoding="utf-8"))
@@ -622,7 +655,8 @@ print(json.dumps([
         self.assertIn("Qwen3-ForcedAligner-0.6B", server)
         self.assertIn('"/acoustic/enroll"', server)
         self.assertIn("enrich_acoustic_profile", server)
-        self.assertIn('--audio-path "$audio_file"', toggle)
+        controller = (PLUGIN / "bin/localtypectl").read_text(encoding="utf-8")
+        self.assertIn('"--audio-path", str(review.get("audio_path", ""))', controller)
         self.assertIn('root.settings.acoustic_learning === true', app)
 
     def test_large_rewrites_and_punctuation_are_not_learned(self) -> None:

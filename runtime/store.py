@@ -314,7 +314,14 @@ def latest_history(application_class: str = "") -> dict | None:
 
 def propose_corrections(args: argparse.Namespace) -> list[dict]:
     history = None
-    if args.history_id:
+    if args.original.strip():
+        history = {
+            "id": args.history_id,
+            "final_text": args.original.strip(),
+            "application_class": args.application_class,
+            "application_title": args.application_title,
+        }
+    if history is None and args.history_id:
         history = next(
             (entry for entry in history_entries() if entry.get("id") == args.history_id),
             None,
@@ -507,6 +514,7 @@ def add_history(args: argparse.Namespace) -> dict | None:
         "application_title": args.application_title or args.application_class or "当前应用",
         "scene": args.scene,
         "raw_text": args.raw_text,
+        "recognized_text": args.final_text,
         "final_text": args.final_text,
         "polished": args.polished,
         "output_status": "typed",
@@ -550,6 +558,10 @@ def main() -> None:
     history_add.add_argument("--injection-method", default="unknown")
     history_add.add_argument("--created-at", default="")
     history_add.add_argument("--audio-path", default="")
+    history_add.add_argument("--output-json", action="store_true")
+    history_update = subparsers.add_parser("history-update-final")
+    history_update.add_argument("id")
+    history_update.add_argument("text")
     history_delete = subparsers.add_parser("history-delete")
     history_delete.add_argument("id")
     subparsers.add_parser("history-clear")
@@ -565,10 +577,11 @@ def main() -> None:
     corrections_list.add_argument("--status", default="all", choices=("all", "pending", "learned", "ignored"))
     correction_propose = subparsers.add_parser("correction-propose")
     correction_propose.add_argument("--corrected", required=True)
+    correction_propose.add_argument("--original", default="")
     correction_propose.add_argument("--history-id", default="")
     correction_propose.add_argument("--application-class", default="")
     correction_propose.add_argument("--application-title", default="")
-    correction_propose.add_argument("--source", default="selection", choices=("selection", "history"))
+    correction_propose.add_argument("--source", default="selection", choices=("selection", "history", "overlay"))
     correction_accept = subparsers.add_parser("correction-accept")
     correction_accept.add_argument("id")
     correction_ignore = subparsers.add_parser("correction-ignore")
@@ -606,7 +619,17 @@ def main() -> None:
     if args.command == "history-list":
         print(json.dumps(history_entries(args.query), ensure_ascii=False))
     elif args.command == "history-add":
-        add_history(args)
+        entry = add_history(args)
+        if entry is not None and args.output_json:
+            print(json.dumps(entry, ensure_ascii=False))
+    elif args.command == "history-update-final":
+        entries = history_entries()
+        entry = next((item for item in entries if item.get("id") == args.id), None)
+        if entry is None:
+            raise SystemExit("History entry was not found")
+        entry["final_text"] = args.text
+        entry["user_edited"] = args.text != str(entry.get("recognized_text", args.text))
+        write_json(HISTORY_PATH, entries)
     elif args.command == "history-delete":
         entries = history_entries()
         deleted = next((entry for entry in entries if entry.get("id") == args.id), None)

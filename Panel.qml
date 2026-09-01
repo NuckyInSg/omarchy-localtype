@@ -42,6 +42,7 @@ Panel {
   function phaseTitle() {
     if (runtimeState.recording) return l("Listening", "正在聆听")
     if (runtimeState.processing) return l("Processing", "正在处理")
+    if (runtimeState.reviewing) return l("Review dictation", "确认听写")
     if (runtimeState.installing) return l("Installing local engine", "正在安装本地引擎")
     if (runtimeState.phase === "error") return l("Needs attention", "需要处理")
     if (!runtimeState.serviceActive) return l("Service offline", "服务离线")
@@ -52,6 +53,7 @@ Panel {
   function phaseMeta() {
     if (runtimeState.recording) return selectedMode === "smart" ? l("SMART DICTATION", "智能听写") : l("VERBATIM DICTATION", "原文听写")
     if (runtimeState.processing) return l("TRANSCRIBING LOCALLY", "正在本地识别")
+    if (runtimeState.reviewing) return l("EDIT · ENTER TO PASTE", "编辑 · ENTER 粘贴")
     if (runtimeState.installing) return l("FIRST-RUN SETUP", "首次运行设置")
     if (runtimeState.phase === "error") return l("LAST REQUEST FAILED", "上次请求失败")
     if (!runtimeState.serviceActive) return l("START THE LOCAL SERVICE", "启动本地服务")
@@ -61,6 +63,7 @@ Panel {
 
   function actionLabel() {
     if (runtimeState.recording) return l("Stop & type", "停止并输入")
+    if (runtimeState.reviewing) return l("Finish in the review box", "请在确认框中完成")
     if (runtimeState.installing || runtimeState.processing || runtimeState.actionRunning) return l("Working…", "处理中…")
     if (!runtimeState.serviceActive) return l("Start service", "启动服务")
     if (!runtimeState.backendReady) return l("Models are loading", "模型正在加载")
@@ -75,7 +78,7 @@ Panel {
   }
 
   function runPrimaryAction() {
-    if (runtimeState.actionRunning || runtimeState.processing || runtimeState.installing) return
+    if (runtimeState.actionRunning || runtimeState.processing || runtimeState.reviewing || runtimeState.installing) return
     if (!runtimeState.serviceActive) runtimeState.runAction(["start"])
     else if (runtimeState.backendReady || runtimeState.recording) runtimeState.runAction(["toggle", selectedMode])
   }
@@ -152,7 +155,7 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: runtimeState.serviceActive ? "󰍬" : "󰍭"
-    active: runtimeState.recording || runtimeState.processing
+    active: runtimeState.recording || runtimeState.processing || runtimeState.reviewing
     tooltipText: runtimeState.recording ? root.l("LocalType is listening", "LocalType 正在聆听") : (runtimeState.backendReady ? root.l("LocalType ready", "LocalType 已就绪") : root.l("LocalType offline", "LocalType 离线"))
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.runPrimaryAction()

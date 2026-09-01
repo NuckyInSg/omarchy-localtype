@@ -55,7 +55,7 @@ def main() -> None:
     update = subparsers.add_parser("set")
     update.add_argument(
         "status",
-        choices=("idle", "recording", "processing", "installing", "starting", "error"),
+        choices=("idle", "recording", "processing", "reviewing", "installing", "starting", "error"),
     )
     update.add_argument("--mode", choices=("smart", "raw"))
     update.add_argument("--text")

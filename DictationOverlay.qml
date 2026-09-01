@@ -9,10 +9,13 @@ Item {
 
   required property var runtimeState
 
-  readonly property bool shown: runtimeState.recording || runtimeState.processing
+  readonly property bool shown: (runtimeState.recording || runtimeState.processing || runtimeState.reviewing)
+    && !(runtimeState.reviewing && submitting)
   readonly property string partialText: String(runtimeState.record.partial_text || "").trim()
+  readonly property string reviewText: String(runtimeState.record.review_text || "")
   readonly property string language: String(runtimeState.record.language || "en")
   property real wavePhase: 0
+  property bool submitting: false
 
   function l(english, chinese) {
     return root.language === "zh" ? chinese : english
@@ -26,6 +29,34 @@ Item {
   function cancelRecording() {
     if (runtimeState.recording && !runtimeState.actionRunning)
       runtimeState.runAction(["cancel"])
+  }
+
+  function commitReview(text) {
+    if (runtimeState.reviewing && !runtimeState.actionRunning && String(text).trim() !== "") {
+      // Unmap the exclusive layer before starting the paste process. Waiting in
+      // the controller is not sufficient because a status refresh can already
+      // be in flight and delay the visible state update by one polling cycle.
+      submitting = true
+      runtimeState.runAction(["review-commit", String(text)])
+    }
+  }
+
+  function cancelReview() {
+    if (runtimeState.reviewing && !runtimeState.actionRunning) {
+      submitting = true
+      runtimeState.runAction(["review-cancel"])
+    }
+  }
+
+  Connections {
+    target: root.runtimeState
+    function onActionFinished() {
+      root.submitting = false
+    }
+    function onRefreshed() {
+      if (root.runtimeState.recording || root.runtimeState.processing)
+        root.submitting = false
+    }
   }
 
   Timer {
@@ -45,6 +76,48 @@ Item {
       readonly property bool focusedOutput: Hyprland.focusedMonitor === null
         ? modelData === Quickshell.screens[0]
         : modelData.name === Hyprland.focusedMonitor.name
+      property bool reviewLoaded: false
+
+      Timer {
+        interval: 80
+        running: overlayWindow.visible && root.runtimeState.reviewing && !transcriptEditor.activeFocus
+        repeat: true
+        onTriggered: transcriptEditor.forceActiveFocus()
+      }
+
+      Shortcut {
+        sequence: "Escape"
+        enabled: overlayWindow.visible && root.runtimeState.reviewing
+        onActivated: root.cancelReview()
+      }
+
+      Shortcut {
+        sequence: "Return"
+        enabled: overlayWindow.visible && root.runtimeState.reviewing
+        onActivated: root.commitReview(transcriptEditor.text)
+      }
+
+      Shortcut {
+        sequence: "Enter"
+        enabled: overlayWindow.visible && root.runtimeState.reviewing
+        onActivated: root.commitReview(transcriptEditor.text)
+      }
+
+      Connections {
+        target: root.runtimeState
+        function onRefreshed() {
+          if (root.runtimeState.reviewing && !overlayWindow.reviewLoaded) {
+            overlayWindow.reviewLoaded = true
+            transcriptEditor.text = root.reviewText
+            Qt.callLater(function() {
+              transcriptEditor.forceActiveFocus()
+              transcriptEditor.cursorPosition = transcriptEditor.length
+            })
+          } else if (!root.runtimeState.reviewing) {
+            overlayWindow.reviewLoaded = false
+          }
+        }
+      }
 
       screen: modelData
       visible: root.shown && focusedOutput
@@ -58,11 +131,13 @@ Item {
       exclusionMode: ExclusionMode.Ignore
       WlrLayershell.namespace: "localtype-dictation-overlay"
       WlrLayershell.layer: WlrLayer.Overlay
-      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+      WlrLayershell.keyboardFocus: root.runtimeState.reviewing && !root.submitting
+        ? WlrKeyboardFocus.Exclusive
+        : WlrKeyboardFocus.None
 
-      // The transcript is visual-only. Only the compact control capsule takes
-      // pointer input, so the overlay never blocks the application underneath.
-      mask: Region { item: controlCapsule }
+      // Recording previews remain click-through. Review mode intentionally
+      // owns the editor area and keyboard until Enter or Escape is pressed.
+      mask: Region { item: root.runtimeState.reviewing ? overlayColumn : controlCapsule }
 
       Column {
         id: overlayColumn
@@ -84,12 +159,16 @@ Item {
         Rectangle {
           id: transcriptCard
 
-          visible: root.runtimeState.recording && root.partialText !== ""
-          width: Math.min(760, Math.max(320, transcriptText.implicitWidth + 40), overlayWindow.width - 64)
-          height: Math.min(184, Math.max(56, transcriptText.implicitHeight + 30))
+          visible: (root.runtimeState.recording && root.partialText !== "") || root.runtimeState.reviewing
+          width: root.runtimeState.reviewing
+            ? Math.min(760, overlayWindow.width - 64)
+            : Math.min(760, Math.max(320, transcriptText.implicitWidth + 40), overlayWindow.width - 64)
+          height: root.runtimeState.reviewing
+            ? 180
+            : Math.min(184, Math.max(56, transcriptText.implicitHeight + 30))
           anchors.horizontalCenter: parent.horizontalCenter
           radius: 17
-          color: "#2d63ea"
+          color: root.runtimeState.reviewing ? Qt.rgba(0.04, 0.045, 0.06, 0.98) : "#2d63ea"
 
           Rectangle {
             anchors.fill: parent
@@ -103,6 +182,7 @@ Item {
           Text {
             id: transcriptText
 
+            visible: !root.runtimeState.reviewing
             anchors.fill: parent
             anchors.leftMargin: 20
             anchors.rightMargin: 20
@@ -118,12 +198,39 @@ Item {
             elide: Text.ElideRight
             lineHeight: 1.18
           }
+
+          TextEdit {
+            id: transcriptEditor
+
+            visible: root.runtimeState.reviewing
+            anchors.fill: parent
+            anchors.margins: 17
+            color: "white"
+            selectionColor: "#2d63ea"
+            selectedTextColor: "white"
+            font.family: Style.font.family
+            font.pixelSize: Math.max(16, Style.font.body)
+            font.weight: Font.Medium
+            wrapMode: TextEdit.Wrap
+            selectByMouse: true
+            activeFocusOnTab: true
+            Keys.onPressed: function(event) {
+              if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                  && !(event.modifiers & Qt.ShiftModifier)) {
+                event.accepted = true
+                root.commitReview(transcriptEditor.text)
+              } else if (event.key === Qt.Key_Escape) {
+                event.accepted = true
+                root.cancelReview()
+              }
+            }
+          }
         }
 
         Rectangle {
           id: controlCapsule
 
-          width: root.runtimeState.processing ? 126 : 154
+          width: root.runtimeState.reviewing ? 244 : (root.runtimeState.processing ? 126 : 154)
           height: 50
           anchors.horizontalCenter: parent.horizontalCenter
           radius: height / 2
@@ -227,6 +334,59 @@ Item {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.finishRecording()
+              }
+            }
+          }
+
+          Row {
+            visible: root.runtimeState.reviewing
+            anchors.centerIn: parent
+            spacing: 8
+
+            Rectangle {
+              width: 76
+              height: 36
+              radius: 18
+              color: reviewCancelMouse.containsMouse ? Qt.rgba(1, 1, 1, 0.16) : Qt.rgba(1, 1, 1, 0.08)
+
+              Text {
+                anchors.centerIn: parent
+                text: root.l("Cancel", "取消")
+                color: Qt.rgba(1, 1, 1, 0.72)
+                font.family: Style.font.family
+                font.pixelSize: Math.max(12, Style.font.caption)
+              }
+
+              MouseArea {
+                id: reviewCancelMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.cancelReview()
+              }
+            }
+
+            Rectangle {
+              width: 144
+              height: 36
+              radius: 18
+              color: reviewCommitMouse.containsMouse ? "white" : Qt.rgba(1, 1, 1, 0.94)
+
+              Text {
+                anchors.centerIn: parent
+                text: root.l("Enter · Paste", "Enter · 粘贴")
+                color: "#101116"
+                font.family: Style.font.family
+                font.pixelSize: Math.max(13, Style.font.caption)
+                font.weight: Font.DemiBold
+              }
+
+              MouseArea {
+                id: reviewCommitMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.commitReview(transcriptEditor.text)
               }
             }
           }

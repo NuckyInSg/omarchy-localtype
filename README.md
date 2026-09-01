@@ -23,7 +23,7 @@ The plugin installs its runtime, models, user-level systemd service, desktop lau
 | `Shift+F9` | Start or stop verbatim dictation |
 | `Ctrl+Shift+F9` | Learn a correction from the selected corrected sentence |
 
-LocalType types text but never presses Enter, sends a message, or executes a terminal command. While dictating, a Typeless-inspired capsule stays at the bottom center of the focused display, with cancel/finish controls and a waveform. Qwen3-ASR runs through vLLM and updates the blue transcript card from local 500 ms audio blocks; the unstable suffix may be revised as more speech arrives. When you stop, the preview is discarded and the capsule contracts to a local-processing indicator. LocalType then performs one independent full-WAV ASR pass, acoustic correction, and Polish pass before committing the result exactly once. Streaming text never enters history or learning. Routine progress notifications are replaced by this surface; errors still use a desktop notification. The overlay never takes keyboard focus and only its control capsule intercepts pointer input. Terminal apps receive one bracketed-paste event so TUIs such as Codex do not split it; Chromium-based browsers use one clipboard paste to avoid dropping the first virtual character.
+LocalType types text but never presses Enter in the target app, sends a message, or executes a terminal command. While dictating, a Typeless-inspired capsule stays at the bottom center of the focused display, with cancel/finish controls and a waveform. Qwen3-ASR runs through vLLM and updates the blue transcript card from local 500 ms audio blocks; the unstable suffix may be revised as more speech arrives. When you stop, the preview is discarded and the capsule contracts to a local-processing indicator. LocalType then performs one independent full-WAV ASR pass, acoustic correction, and Polish pass. The final result appears in an editable floating review box instead of being injected immediately. Press Enter (or click the confirmation capsule) to paste it once into the captured target, Shift+Enter for a newline, or Escape to discard it. Local edits made in this box are automatically diffed against the recognized result and fed into correction learning. Streaming text never enters history or learning. Recording previews remain focus-free; only final review temporarily takes keyboard focus. Terminal and browser targets receive one clipboard paste to prevent split or dropped input.
 
 Open the desktop app from the Omarchy launcher, the bar panel, or the CLI:
 
@@ -35,7 +35,9 @@ The native Omarchy app follows the active theme and keeps its main navigation to
 
 ### Correction learning
 
-When LocalType gets a name or product term wrong, correct it normally in the target app, select the complete corrected sentence, and press `Ctrl+Shift+F9`. LocalType aligns it with the latest dictation from that app. One clear local correction is learned immediately; ambiguous or multi-part edits go to **Dictionary → Review corrections**. You never have to author a replacement rule yourself.
+When LocalType gets a name or product term wrong, edit it directly in the floating review box and press Enter. LocalType aligns the before/after sentence automatically. One clear local correction is learned immediately; ambiguous or multi-part edits go to **Dictionary → Review corrections**. You never have to author a replacement rule yourself.
+
+After text has already been submitted, the original workflow remains available: correct it in the target app, select the complete corrected sentence, and press `Ctrl+Shift+F9`.
 
 You can also choose **Correct & learn** on a History entry and edit the full sentence inside LocalType. Canonical spellings bias Qwen3-ASR before recognition. After recognition, scoped or proper-name-like exact aliases are applied safely, while phonetic and orthographic matches are checked against sentence context by the local language model—never a blind global replacement. Large rewrites, deletions, and punctuation-only edits are not learned. Dictionary entries can contain just a canonical word; pronunciation is optional.
 
@@ -132,12 +134,14 @@ sequenceDiagram
     H->>R: Stop and finalize WAV
     R->>A: Independent full-WAV recognition
     A-->>L: Final raw transcript + app context
-    L-->>R: One conservative Polish pass
-    alt Regular app
-        R->>T: wtype input
-    else Terminal or Codex
-        R->>T: One bracketed-paste event
+    L-->>O: Final text in editable review box
+    alt User confirms unchanged text
+        U->>O: Enter
+    else User corrects recognition
+        U->>O: Edit, then Enter
+        O->>R: Learn the local before/after diff
     end
+    R->>T: Restore captured target and paste once
 ```
 
 See the [product direction](docs/PRODUCT.md) and [desktop gap analysis](docs/OPENTYPELESS_GAP_ANALYSIS.md) for the broader roadmap.

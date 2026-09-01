@@ -6,6 +6,7 @@ audio_file="$runtime_dir/recording.wav"
 mode_file="$runtime_dir/mode"
 started_file="$runtime_dir/started_at_ms"
 stream_session_file="$runtime_dir/stream-session"
+review_file="$runtime_dir/review.json"
 record_unit="localtype-record.service"
 requested_mode="${1:-smart}"
 health_url="${LOCALTYPE_HEALTH_URL:-http://127.0.0.1:8765/health}"
@@ -49,6 +50,7 @@ if systemctl --user is-active --quiet "$record_unit"; then
   focused_window=$(hyprctl activewindow -j)
   focused_class=$(jq -r '.class // ""' <<<"$focused_window")
   focused_title=$(jq -r '.title // ""' <<<"$focused_window")
+  focused_address=$(jq -r '.address // ""' <<<"$focused_window")
   case "$focused_class" in
     *[Cc]odex*|com.mitchellh.ghostty|Alacritty|kitty|foot|org.wezfurlong.wezterm) scene="codex" ;;
     *[Cc]hromium*|*chrome*) scene="chromium" ;;
@@ -73,41 +75,27 @@ if systemctl --user is-active --quiet "$record_unit"; then
   processing_ms=$(($(date +%s%3N) - processing_started_ms))
 
   if [[ -n "$text" ]]; then
-    if [[ "$focused_class" =~ ^(com\.mitchellh\.ghostty|Alacritty|kitty|foot|org\.wezfurlong\.wezterm)$ ]]; then
-      # Terminal TUIs such as Codex need one bracketed-paste event. Sending the
-      # transcript as individual virtual keystrokes can be split into bursts.
-      printf '%s' "$text" | wl-copy
-      wtype -M ctrl -M shift -k v -m shift -m ctrl
-      injection_method="clipboard_terminal"
-    elif [[ "$focused_class" =~ ([Cc]hromium|[Cc]hrome) ]]; then
-      # Chromium can drop the first virtual character from a wtype sequence.
-      # A single native paste event avoids per-character focus/IME races.
-      printf '%s' "$text" | wl-copy
-      wtype -M ctrl -k v -m ctrl
-      injection_method="clipboard_browser"
-    else
-      wtype -- "$text"
-      injection_method="wtype"
-    fi
-    history_args=(
-      history-add --mode "$mode"
-      --application-class "$focused_class"
-      --application-title "$focused_title"
-      --scene "$scene"
-      --raw-text "$raw_text"
-      --final-text "$text"
-      --duration-ms "$duration_ms"
-      --processing-ms "$processing_ms"
-      --injection-method "$injection_method"
-      --audio-path "$audio_file"
-    )
-    [[ "$polished" == "true" ]] && history_args+=(--polished)
-    "$store_cmd" "${history_args[@]}"
-    "$state_cmd" set idle --mode "$mode" --text "$text" --raw-text "$raw_text" \
+    # Do not modify the target application yet. The focused target and all
+    # transcription metadata are kept until the user confirms the editable
+    # overlay; review-commit performs one paste and learns any local post-edit.
+    review_tmp="$review_file.tmp.$$"
+    jq -n \
+      --arg text "$text" --arg raw_text "$raw_text" --arg mode "$mode" \
+      --arg application_class "$focused_class" --arg application_title "$focused_title" \
+      --arg target_address "$focused_address" --arg scene "$scene" \
+      --arg audio_path "$audio_file" --argjson polished "$polished" \
+      --argjson duration_ms "$duration_ms" --argjson processing_ms "$processing_ms" \
+      '{text:$text,raw_text:$raw_text,mode:$mode,application_class:$application_class,
+        application_title:$application_title,target_address:$target_address,scene:$scene,
+        audio_path:$audio_path,polished:$polished,duration_ms:$duration_ms,
+        processing_ms:$processing_ms}' > "$review_tmp"
+    chmod 600 "$review_tmp"
+    mv -f "$review_tmp" "$review_file"
+    "$state_cmd" set reviewing --mode "$mode" --text "$text" --raw-text "$raw_text" \
       --duration-ms "$duration_ms" --processing-ms "$processing_ms" \
       --application-class "$focused_class" --application-title "$focused_title"
     refresh_overlay
-    rm -f "$started_file" "$audio_file"
+    rm -f "$started_file"
   else
     "$state_cmd" set error --mode "$mode" --error "$(message "No speech was recognized" "没有识别到文字")"
     refresh_overlay
@@ -119,7 +107,7 @@ else
     exit 1
   fi
 
-  rm -f "$audio_file" "$stream_session_file"
+  rm -f "$audio_file" "$stream_session_file" "$review_file"
   printf '%s' "$requested_mode" > "$mode_file"
   date +%s%3N > "$started_file"
   focused_window=$(hyprctl activewindow -j)

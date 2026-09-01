@@ -51,6 +51,7 @@ SETTINGS_FILE = CONFIG_HOME / "settings.json"
 SERVICE_FILE = SYSTEMD_HOME / "localtype.service"
 RECORDING = RUNTIME_HOME / "recording.wav"
 STREAM_SESSION = RUNTIME_HOME / "stream-session"
+REVIEW_FILE = RUNTIME_HOME / "review.json"
 LOCK_FILE = RUNTIME_HOME / "install.lock"
 SERVICE = "localtype.service"
 RECORD_SERVICE = "localtype-record.service"
@@ -714,6 +715,7 @@ def print_overlay_status() -> None:
         "language": language(),
         "detail": state.get("detail", ""),
         "partial_text": state.get("partial_text", ""),
+        "review_text": state.get("last_text", "") if phase == "reviewing" else "",
         "service_active": service_active,
         "backend_ready": service_active,
         "recording": recording,
@@ -784,6 +786,200 @@ def restore_clipboard(previous: str | None) -> None:
         run(["wl-copy", "--clear"])
     else:
         run(["wl-copy"], input_text=previous)
+
+
+def read_pending_review() -> dict:
+    try:
+        value = json.loads(REVIEW_FILE.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def discard_pending_review() -> None:
+    review = read_pending_review()
+    audio_path = Path(str(review.get("audio_path", "")))
+    try:
+        if audio_path.resolve().is_relative_to(RUNTIME_HOME.resolve()):
+            audio_path.unlink(missing_ok=True)
+    except (OSError, RuntimeError):
+        pass
+    REVIEW_FILE.unlink(missing_ok=True)
+
+
+def review_cancel() -> int:
+    discard_pending_review()
+    set_state("idle", detail=localized("Dictation discarded", "已丢弃听写"))
+    refresh_overlay()
+    return 0
+
+
+def set_review_state(review: dict, status: str, display_text: str | None = None) -> None:
+    run([
+        str(STATE_HELPER), "set", status,
+        "--mode", str(review.get("mode", "smart")),
+        "--text", str(review.get("text", "")) if display_text is None else display_text,
+        "--raw-text", str(review.get("raw_text", "")),
+        "--duration-ms", str(int(review.get("duration_ms", 0))),
+        "--processing-ms", str(int(review.get("processing_ms", 0))),
+        "--application-class", str(review.get("application_class", "")),
+        "--application-title", str(review.get("application_title", "")),
+    ])
+    refresh_overlay()
+
+
+def layer_namespace_present(value, namespace: str) -> bool:
+    if isinstance(value, dict):
+        if value.get("namespace") == namespace:
+            return True
+        return any(layer_namespace_present(item, namespace) for item in value.values())
+    if isinstance(value, list):
+        return any(layer_namespace_present(item, namespace) for item in value)
+    return False
+
+
+def wait_for_review_layer_to_close(timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = run(["hyprctl", "layers", "-j"], timeout=1)
+        try:
+            layers = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            layers = {}
+        if not layer_namespace_present(layers, "localtype-dictation-overlay"):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def review_commit(edited_text: str) -> int:
+    review = read_pending_review()
+    if not review or saved_state().get("status") != "reviewing":
+        print(localized("No dictation is waiting for review", "没有等待确认的听写"), file=sys.stderr)
+        return 1
+    if not edited_text.strip():
+        print(localized("The reviewed text cannot be empty", "确认文字不能为空"), file=sys.stderr)
+        return 2
+
+    recognized = str(review.get("text", ""))
+    application_class = str(review.get("application_class", ""))
+    target_address = str(review.get("target_address", ""))
+
+    # Hide the layer immediately to release its keyboard grab. Never leave the
+    # user trapped behind a non-interactive "Polishing" overlay while paste or
+    # optional learning work runs; failures reopen the editable review instead.
+    set_review_state(review, "idle")
+    try:
+        if not wait_for_review_layer_to_close():
+            raise RuntimeError(localized("Review overlay did not release keyboard focus", "确认框未能释放键盘焦点"))
+        if re.fullmatch(r"0x[0-9a-fA-F]+", target_address):
+            focus = run(
+                [
+                    "hyprctl",
+                    "eval",
+                    f"hl.dispatch(hl.dsp.focus({{ window = 'address:{target_address}' }}))",
+                ],
+                timeout=2,
+            )
+            if focus.returncode != 0:
+                raise RuntimeError(focus.stderr.strip() or "could not restore target focus")
+            time.sleep(0.2)
+
+        # Return focus to the captured target and issue one native paste event.
+        # wl-copy forks a clipboard owner. capture_output pipes keep that child
+        # attached and make subprocess.communicate wait forever, so detach both
+        # streams here just like the original shell pipeline did.
+        copied = subprocess.run(
+            ["wl-copy"],
+            input=edited_text,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (subprocess.TimeoutExpired, RuntimeError) as error:
+        set_review_state(review, "reviewing", edited_text)
+        print(str(error) or localized("Paste preparation failed", "粘贴准备失败"), file=sys.stderr)
+        return 1
+    if copied.returncode != 0:
+        set_review_state(review, "reviewing", edited_text)
+        print(copied.stderr.strip() or "wl-copy failed", file=sys.stderr)
+        return copied.returncode
+    terminal = bool(re.search(
+        r"^(com\.mitchellh\.ghostty|Alacritty|kitty|foot|org\.wezfurlong\.wezterm)$",
+        application_class,
+    ))
+    paste_keys = (
+        ["wtype", "-M", "ctrl", "-M", "shift", "-k", "v", "-m", "shift", "-m", "ctrl"]
+        if terminal
+        else ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]
+    )
+    try:
+        pasted = run(paste_keys, timeout=3)
+    except subprocess.TimeoutExpired:
+        set_review_state(review, "reviewing", edited_text)
+        print(localized("Paste timed out", "粘贴超时"), file=sys.stderr)
+        return 1
+    if pasted.returncode != 0:
+        set_review_state(review, "reviewing", edited_text)
+        print(pasted.stderr.strip() or "wtype paste failed", file=sys.stderr)
+        return pasted.returncode
+    injection_method = "review_clipboard_terminal" if terminal else "review_clipboard"
+
+    history_command = [
+        str(STORE_HELPER), "history-add",
+        "--mode", str(review.get("mode", "smart")),
+        "--application-class", application_class,
+        "--application-title", str(review.get("application_title", "")),
+        "--scene", str(review.get("scene", "general")),
+        "--raw-text", str(review.get("raw_text", "")),
+        "--final-text", recognized,
+        "--duration-ms", str(int(review.get("duration_ms", 0))),
+        "--processing-ms", str(int(review.get("processing_ms", 0))),
+        "--injection-method", injection_method,
+        "--audio-path", str(review.get("audio_path", "")),
+        "--output-json",
+    ]
+    if review.get("polished") is True:
+        history_command.append("--polished")
+    history_result = run(history_command)
+    try:
+        history = json.loads(history_result.stdout) if history_result.stdout.strip() else {}
+    except json.JSONDecodeError:
+        history = {}
+    history_id = str(history.get("id", ""))
+
+    if edited_text != recognized:
+        proposal_command = [
+            str(STORE_HELPER), "correction-propose",
+            "--original", recognized,
+            "--corrected", edited_text,
+            "--application-class", application_class,
+            "--application-title", str(review.get("application_title", "")),
+            "--source", "overlay",
+        ]
+        if history_id:
+            proposal_command.extend(["--history-id", history_id])
+        run(proposal_command)
+        if history_id:
+            run([str(STORE_HELPER), "history-update-final", history_id, edited_text])
+        # Text learning is intentionally complete here. Acoustic enrollment can
+        # load the forced aligner for minutes, so it remains an explicit
+        # post-edit/history action instead of blocking this confirmation path.
+
+    discard_pending_review()
+    run([
+        str(STATE_HELPER), "set", "idle",
+        "--mode", str(review.get("mode", "smart")),
+        "--text", edited_text,
+        "--raw-text", str(review.get("raw_text", "")),
+        "--duration-ms", str(int(review.get("duration_ms", 0))),
+        "--processing-ms", str(int(review.get("processing_ms", 0))),
+        "--application-class", application_class,
+        "--application-title", str(review.get("application_title", "")),
+    ])
+    refresh_overlay()
+    return 0
 
 
 def learn_correction() -> int:
@@ -963,6 +1159,12 @@ def main() -> int:
             run(["wl-copy"], check=True, input_text=text)
             notify(localized("Copied", "已复制"), localized("Text copied to the clipboard", "文字已复制到剪贴板"))
         return 0
+    if command == "review-commit":
+        if len(sys.argv) < 3:
+            raise SystemExit("usage: localtypectl review-commit TEXT")
+        return review_commit(sys.argv[2])
+    if command == "review-cancel":
+        return review_cancel()
     if command == "learn-correction":
         return learn_correction()
     if command == "shortcuts-set":
@@ -1026,6 +1228,7 @@ def main() -> int:
     store_commands = {
         "history-list",
         "history-add",
+        "history-update-final",
         "history-delete",
         "history-clear",
         "dictionary-list",

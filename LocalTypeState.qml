@@ -17,10 +17,12 @@ Item {
   readonly property bool serviceActive: record.service_active === true
   readonly property bool recording: record.recording === true || phase === "recording"
   readonly property bool processing: phase === "processing"
+  readonly property bool reviewing: phase === "reviewing"
   readonly property bool installing: phase === "installing"
   readonly property var gpu: record.gpu || ({})
 
   signal refreshed()
+  signal actionFinished()
 
   function refresh() {
     if (root.ctlPath !== "" && !statusProcess.running) statusProcess.running = true
@@ -66,6 +68,7 @@ Item {
 
     onExited: {
       root.refresh()
+      root.actionFinished()
     }
 
     stderr: StdioCollector {
@@ -76,7 +79,7 @@ Item {
 
   Timer {
     id: refreshTimer
-    interval: root.recording || root.processing || root.installing ? 650 : Math.max(1000, root.refreshInterval)
+    interval: root.recording || root.processing || root.reviewing || root.installing ? 650 : Math.max(1000, root.refreshInterval)
     running: true
     repeat: true
     triggeredOnStart: true

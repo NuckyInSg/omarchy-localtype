@@ -32,7 +32,10 @@ Item {
         shown: dictationOverlay.shown,
         phase: runtimeState.phase,
         recording: runtimeState.recording,
-        processing: runtimeState.processing
+        processing: runtimeState.processing,
+        reviewing: runtimeState.reviewing,
+        actionRunning: runtimeState.actionRunning,
+        actionError: runtimeState.actionError
       })
     }
   }
